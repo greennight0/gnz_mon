@@ -1,0 +1,7 @@
+{
+  "name": "GNZ MON",
+  "description": "GNZ MON: Mysteries of nature - Real-time AI camera species identification for plants and animals with interactive nature knowledge.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
