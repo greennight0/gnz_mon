@@ -32,8 +32,39 @@ class ObjectDetectorAnalyzer(
 
     // Bộ nhớ theo dõi quỹ đạo (History & IoU Persistence) để gán ID ổn định và lọc rung lắc khi cầm tay
     private val historyMap = mutableMapOf<Int, TrackHistory>()
+    private val adaptiveModeMap = mutableMapOf<Int, AdaptiveModeState>()
     private var lastTimestamp = System.currentTimeMillis()
     private var nextSyntheticId = 200
+
+    private fun updateAdaptiveMode(trackId: Int, velocityMagnitude: Float, now: Long) {
+        val modeState = adaptiveModeMap.getOrPut(trackId) { AdaptiveModeState() }
+        
+        // Keep last 10 velocity samples
+        modeState.velocityHistory.add(velocityMagnitude)
+        if (modeState.velocityHistory.size > 10) {
+            modeState.velocityHistory.removeAt(0)
+        }
+        
+        // Calculate average velocity
+        val avgVelocity = if (modeState.velocityHistory.isNotEmpty()) {
+            modeState.velocityHistory.average().toFloat()
+        } else {
+            0f
+        }
+        
+        // Determine target mode with hysteresis
+        val targetMode = when {
+            modeState.mode == FilterMode.STATIONARY && avgVelocity > 0.05f -> FilterMode.MOBILE
+            modeState.mode == FilterMode.MOBILE && avgVelocity < 0.02f -> FilterMode.STATIONARY
+            else -> modeState.mode
+        }
+        
+        // Apply 300ms debounce to prevent mode flicker
+        if (targetMode != modeState.mode && (now - modeState.modeChangeTime) >= 300L) {
+            modeState.mode = targetMode
+            modeState.modeChangeTime = now
+        }
+    }
 
     /**
      * Thuật toán One Euro Filter (1€ Filter) cho từng chiều tọa độ:
@@ -76,17 +107,63 @@ class ObjectDetectorAnalyzer(
         }
     }
 
+    // Adaptive filter mode: Stationary or Mobile
+    private enum class FilterMode {
+        STATIONARY, MOBILE
+    }
+
+    // Adaptive mode configuration
+    private data class AdaptiveFilterConfig(
+        val minCutoff: Float,
+        val beta: Float
+    )
+
+    private val filterConfigs = mapOf(
+        FilterMode.STATIONARY to AdaptiveFilterConfig(minCutoff = 0.3f, beta = 0.08f),
+        FilterMode.MOBILE to AdaptiveFilterConfig(minCutoff = 0.5f, beta = 0.15f)
+    )
+
+    // Track adaptive mode state per object with hysteresis and debounce
+    private data class AdaptiveModeState(
+        var mode: FilterMode = FilterMode.STATIONARY,
+        var modeChangeTime: Long = System.currentTimeMillis(),
+        var velocityHistory: MutableList<Float> = mutableListOf() // Last 10 frames
+    )
+
     private data class TrackHistory(
         var lastRect: RectF,
         var framesCount: Int,
         var velocityX: Float = 0f,
         var velocityY: Float = 0f,
         var lastSeenTimestamp: Long = System.currentTimeMillis(),
-        val filterLeft: OneEuroFilter = OneEuroFilter(minCutoff = 0.8f, beta = 0.04f),
-        val filterTop: OneEuroFilter = OneEuroFilter(minCutoff = 0.8f, beta = 0.04f),
-        val filterRight: OneEuroFilter = OneEuroFilter(minCutoff = 0.8f, beta = 0.04f),
-        val filterBottom: OneEuroFilter = OneEuroFilter(minCutoff = 0.8f, beta = 0.04f)
-    )
+        var adaptiveModeState: AdaptiveModeState = AdaptiveModeState(),
+        var filterLeft: OneEuroFilter? = null,
+        var filterTop: OneEuroFilter? = null,
+        var filterRight: OneEuroFilter? = null,
+        var filterBottom: OneEuroFilter? = null
+    ) {
+        fun getFilters(mode: FilterMode): Pair<OneEuroFilter, OneEuroFilter> = {
+            val config = mapOf(
+                FilterMode.STATIONARY to AdaptiveFilterConfig(minCutoff = 0.3f, beta = 0.08f),
+                FilterMode.MOBILE to AdaptiveFilterConfig(minCutoff = 0.5f, beta = 0.15f)
+            )[mode]!!
+            Pair(
+                filterLeft ?: OneEuroFilter(config.minCutoff, config.beta),
+                filterTop ?: OneEuroFilter(config.minCutoff, config.beta)
+            )
+        }.invoke()
+
+        fun reinitializeFilters(mode: FilterMode) {
+            val config = mapOf(
+                FilterMode.STATIONARY to AdaptiveFilterConfig(minCutoff = 0.3f, beta = 0.08f),
+                FilterMode.MOBILE to AdaptiveFilterConfig(minCutoff = 0.5f, beta = 0.15f)
+            )[mode]!!
+            filterLeft = OneEuroFilter(config.minCutoff, config.beta)
+            filterTop = OneEuroFilter(config.minCutoff, config.beta)
+            filterRight = OneEuroFilter(config.minCutoff, config.beta)
+            filterBottom = OneEuroFilter(config.minCutoff, config.beta)
+        }
+    }
 
     private fun calculateIoU(r1: RectF, r2: RectF): Float {
         val interLeft = maxOf(r1.left, r2.left)
@@ -210,13 +287,26 @@ class ObjectDetectorAnalyzer(
             var frames = 1
 
             if (history != null) {
+                // Calculate velocity magnitude for adaptive filtering
+                val velocityMagnitude = kotlin.math.sqrt(history.velocityX * history.velocityX + history.velocityY * history.velocityY)
+                updateAdaptiveMode(finalTrackId, velocityMagnitude, now)
+                
+                // Get current filter mode
+                val modeState = adaptiveModeMap[finalTrackId] ?: AdaptiveModeState()
+                val currentMode = modeState.mode
+                
+                // Initialize or reinitialize filters if needed
+                if (history.filterLeft == null) {
+                    history.reinitializeFilters(currentMode)
+                }
+                
                 // Sử dụng thuật toán One Euro Filter (1€ Filter) cho từng chiều tọa độ (left, top, right, bottom)
                 // sampling rate = 1 / dt (Hz)
                 val rate = (1.0f / dt).coerceIn(10.0f, 60.0f)
-                val fLeft = history.filterLeft.filter(measuredRect.left, rate).coerceIn(0f, 1f)
-                val fTop = history.filterTop.filter(measuredRect.top, rate).coerceIn(0f, 1f)
-                val fRight = history.filterRight.filter(measuredRect.right, rate).coerceIn(fLeft + 0.01f, 1f)
-                val fBottom = history.filterBottom.filter(measuredRect.bottom, rate).coerceIn(fTop + 0.01f, 1f)
+                val fLeft = history.filterLeft!!.filter(measuredRect.left, rate).coerceIn(0f, 1f)
+                val fTop = history.filterTop!!.filter(measuredRect.top, rate).coerceIn(0f, 1f)
+                val fRight = history.filterRight!!.filter(measuredRect.right, rate).coerceIn(fLeft + 0.01f, 1f)
+                val fBottom = history.filterBottom!!.filter(measuredRect.bottom, rate).coerceIn(fTop + 0.01f, 1f)
                 smoothedRect = RectF(fLeft, fTop, fRight, fBottom)
 
                 val dx = smoothedRect.centerX() - history.lastRect.centerX()
@@ -238,11 +328,12 @@ class ObjectDetectorAnalyzer(
                     velocityY = 0f,
                     lastSeenTimestamp = now
                 )
+                newHistory.reinitializeFilters(FilterMode.STATIONARY)
                 val rate = (1.0f / dt).coerceIn(10.0f, 60.0f)
-                newHistory.filterLeft.filter(measuredRect.left, rate)
-                newHistory.filterTop.filter(measuredRect.top, rate)
-                newHistory.filterRight.filter(measuredRect.right, rate)
-                newHistory.filterBottom.filter(measuredRect.bottom, rate)
+                newHistory.filterLeft!!.filter(measuredRect.left, rate)
+                newHistory.filterTop!!.filter(measuredRect.top, rate)
+                newHistory.filterRight!!.filter(measuredRect.right, rate)
+                newHistory.filterBottom!!.filter(measuredRect.bottom, rate)
                 smoothedRect = measuredRect
                 historyMap[finalTrackId] = newHistory
             }
