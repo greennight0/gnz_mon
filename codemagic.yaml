@@ -6,8 +6,6 @@ workflows:
     environment:
       vars:
         PACKAGE_NAME: "com.aistudio.gnzmon.wqrk"
-      android_signing:
-        - keystore_reference
       groups:
         - google_credentials
     scripts:
