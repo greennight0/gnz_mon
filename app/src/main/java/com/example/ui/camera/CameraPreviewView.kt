@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.ViewGroup
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
@@ -30,6 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.data.model.TrackedBoundingBox
 import java.util.concurrent.Executors
 
 class CameraController(
@@ -39,9 +41,20 @@ class CameraController(
 ) {
     var imageCapture: ImageCapture? = null
     var camera: Camera? = null
+    var currentAnalyzer: ObjectDetectorAnalyzer? = null
+    var previewView: PreviewView? = null
     private var cameraExecutor = Executors.newSingleThreadExecutor()
+    val analysisExecutor = Executors.newSingleThreadExecutor()
 
     fun takePhoto() {
+        // Tối ưu hóa phản hồi: Trích xuất trực tiếp bitmap hiện tại từ PreviewView
+        // Giúp phản hồi siêu tốc, không bao giờ bị đơ/treo khung hình trên máy ảo hay thiết bị thật
+        val instantBitmap = previewView?.bitmap
+        if (instantBitmap != null) {
+            onImageCaptured(instantBitmap)
+            return
+        }
+
         val capture = imageCapture ?: run {
             onError(IllegalStateException("Camera capture is not ready"))
             return
@@ -82,8 +95,12 @@ class CameraController(
 
     fun release() {
         try {
+            currentAnalyzer?.close()
             if (!cameraExecutor.isShutdown) {
                 cameraExecutor.shutdown()
+            }
+            if (!analysisExecutor.isShutdown) {
+                analysisExecutor.shutdown()
             }
         } catch (e: Exception) {
             Log.w("CameraController", "Error releasing camera executor", e)
@@ -103,6 +120,7 @@ fun CameraPreviewView(
     isFrontCamera: Boolean = false,
     isTorchEnabled: Boolean = false,
     onControllerReady: (CameraController) -> Unit,
+    onObjectsTracked: (List<TrackedBoundingBox>, Int) -> Unit = { _, _ -> },
     onImageCaptured: (Bitmap) -> Unit,
     onError: (Exception) -> Unit
 ) {
@@ -125,7 +143,9 @@ fun CameraPreviewView(
             context = context,
             onImageCaptured = onImageCaptured,
             onError = onError
-        )
+        ).apply {
+            this.previewView = previewView
+        }
     }
 
     var cameraProvider: ProcessCameraProvider? by remember { mutableStateOf(null) }
@@ -154,6 +174,18 @@ fun CameraPreviewView(
                     .build()
                 cameraController.imageCapture = imageCapture
 
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                    .build()
+
+                val analyzer = ObjectDetectorAnalyzer { boxes, latency ->
+                    onObjectsTracked(boxes, latency)
+                }
+                cameraController.currentAnalyzer?.close()
+                cameraController.currentAnalyzer = analyzer
+                imageAnalysis.setAnalyzer(cameraController.analysisExecutor, analyzer)
+
                 val cameraSelector = if (isFrontCamera) {
                     CameraSelector.DEFAULT_FRONT_CAMERA
                 } else {
@@ -161,12 +193,25 @@ fun CameraPreviewView(
                 }
 
                 provider.unbindAll()
-                val camera = provider.bindToLifecycle(
-                    lifecycleOwner,
-                    cameraSelector,
-                    preview,
-                    imageCapture
-                )
+
+                val camera = try {
+                    provider.bindToLifecycle(
+                        lifecycleOwner,
+                        cameraSelector,
+                        preview,
+                        imageCapture,
+                        imageAnalysis
+                    )
+                } catch (bindEx: Exception) {
+                    Log.w("CameraPreviewView", "ImageAnalysis binding fallback", bindEx)
+                    provider.bindToLifecycle(
+                        lifecycleOwner,
+                        cameraSelector,
+                        preview,
+                        imageCapture
+                    )
+                }
+
                 cameraController.camera = camera
                 cameraController.toggleTorch(isTorchEnabled)
             } catch (e: Exception) {

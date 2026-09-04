@@ -60,9 +60,8 @@ import com.example.data.model.AppThemeMode
 import com.example.ui.MainViewModel
 import com.example.ui.camera.CameraController
 import com.example.ui.camera.CameraPreviewView
-import com.example.ui.components.JournalSheet
 import com.example.ui.components.ScannerOverlay
-import com.example.ui.components.SettingsSheet
+import com.example.ui.components.SnsDialog
 import com.example.ui.components.SpeciesDetailSheet
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.LaserCyan
@@ -113,8 +112,10 @@ fun MysteriesOfNatureApp(
     val themeMode by viewModel.themeMode.collectAsState()
     val customApiKey by viewModel.customApiKey.collectAsState()
     val isSettingsOpen by viewModel.isSettingsOpen.collectAsState()
-    val isJournalOpen by viewModel.isJournalOpen.collectAsState()
-    val discoveredList by viewModel.discoveredJournal.collectAsState()
+    val trackedObjects by viewModel.trackedObjects.collectAsState()
+    val selectedTrackId by viewModel.selectedTrackId.collectAsState()
+    val activeAlgorithm by viewModel.activeAlgorithm.collectAsState()
+    val inferenceLatencyMs by viewModel.inferenceLatencyMs.collectAsState()
 
     var cameraController: CameraController? by remember { mutableStateOf(null) }
 
@@ -137,9 +138,7 @@ fun MysteriesOfNatureApp(
         }
     }
 
-    val detailSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val settingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val journalSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var isSnsOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = Modifier
@@ -158,6 +157,9 @@ fun MysteriesOfNatureApp(
                     isFrontCamera = isFrontCamera,
                     isTorchEnabled = isTorchEnabled,
                     onControllerReady = { cameraController = it },
+                    onObjectsTracked = { boxes, latency ->
+                        viewModel.onObjectsTracked(boxes, latency)
+                    },
                     onImageCaptured = { bitmap ->
                         viewModel.analyzeImage(bitmap)
                     },
@@ -174,74 +176,78 @@ fun MysteriesOfNatureApp(
                 )
             }
 
-            // High-Tech Scanner HUD Overlay (Targeting Grid / Scanbox)
+            // High-Tech Scanner HUD Overlay (Khung nhận diện & Khung theo dõi đối tượng / Bounding Box & Object Tracking Box)
             ScannerOverlay(
                 detectedSpecies = detectedSpecies,
                 isAnalyzing = isAnalyzing,
                 language = language,
+                trackedObjects = trackedObjects,
+                selectedTrackId = selectedTrackId,
+                activeAlgorithm = activeAlgorithm,
+                inferenceLatencyMs = inferenceLatencyMs,
+                onAlgorithmToggle = { viewModel.toggleAlgorithm() },
+                onSelectTrack = { trackId -> viewModel.selectTrack(trackId) },
                 onSpeciesClick = { species ->
                     viewModel.openSpeciesDetail(species)
                 },
                 onCaptureClick = {
                     if (cameraPermissionState.status.isGranted && cameraController != null) {
-                        cameraController?.takePhoto()
+                        val instantBmp = cameraController?.previewView?.bitmap
+                        if (instantBmp != null) {
+                            viewModel.analyzeImage(instantBmp)
+                        } else {
+                            cameraController?.takePhoto()
+                        }
                     } else {
                         // Smart instant species recognition
                         viewModel.triggerDemoSampleScan()
                     }
                 },
-                onOpenSettings = { viewModel.openSettings() }
+                onRescanTarget = {
+                    viewModel.rescanCurrentTarget()
+                    if (cameraPermissionState.status.isGranted && cameraController != null) {
+                        val instantBmp = cameraController?.previewView?.bitmap
+                        if (instantBmp != null) {
+                            viewModel.analyzeImage(instantBmp)
+                        } else {
+                            cameraController?.takePhoto()
+                        }
+                    } else {
+                        viewModel.triggerDemoSampleScan()
+                    }
+                },
+                onTapCreateOrMoveTarget = { normX, normY ->
+                    viewModel.createOrMoveTargetBox(normX, normY)
+                },
+                onDismissSpecies = {
+                    viewModel.dismissSpeciesTag()
+                },
+                onNextTrack = {
+                    viewModel.selectNextTrack()
+                },
+                isTorchEnabled = isTorchEnabled,
+                onTorchToggle = { viewModel.toggleTorch() },
+                onLanguageToggle = { viewModel.toggleLanguage() },
+                onSnsClick = { isSnsOpen = true }
             )
 
-            // Species Detail Modal Sheet
+            // Compact Species Info Dialog (Kích thước gọn gàng, không full màn hình)
             selectedSpeciesDetail?.let { species ->
                 SpeciesDetailSheet(
                     species = species,
                     language = language,
-                    sheetState = detailSheetState,
                     onDismiss = {
-                        scope.launch { detailSheetState.hide() }
                         viewModel.closeSpeciesDetail()
                     }
                 )
             }
 
-            // Settings Sheet
-            if (isSettingsOpen) {
-                SettingsSheet(
-                    language = language,
-                    themeMode = themeMode,
-                    customApiKey = customApiKey,
+            // GNZ Social Networks & Community Dialog (SNS)
+            if (isSnsOpen) {
+                SnsDialog(
                     socialLinks = viewModel.socialLinks,
-                    sheetState = settingsSheetState,
-                    onDismiss = {
-                        scope.launch { settingsSheetState.hide() }
-                        viewModel.closeSettings()
-                    },
-                    onLanguageChange = { viewModel.setLanguage(it) },
-                    onThemeModeChange = { viewModel.setThemeMode(it) },
-                    onApiKeyChange = { viewModel.setCustomApiKey(it) }
-                )
-            }
-
-            // Nature Journal Sheet
-            if (isJournalOpen) {
-                JournalSheet(
-                    speciesList = discoveredList,
                     language = language,
-                    sheetState = journalSheetState,
-                    onDismiss = {
-                        scope.launch { journalSheetState.hide() }
-                        viewModel.closeJournal()
-                    },
-                    onSpeciesClick = { item ->
-                        scope.launch { journalSheetState.hide() }
-                        viewModel.closeJournal()
-                        viewModel.openSpeciesDetail(item)
-                    },
-                    onDeleteSpecies = { item ->
-                        viewModel.deleteJournalItem(item)
-                    }
+                    onDismiss = { isSnsOpen = false }
                 )
             }
         }
