@@ -161,6 +161,9 @@ fun ScannerOverlay(
     // User tap-to-track target location (fallback or manual repositioning)
     var userTargetOffset by remember { mutableStateOf<Offset?>(null) }
     var tapPingOffset by remember { mutableStateOf<Offset?>(null) }
+    
+    // Tap history for temporal smoothing (keep last 3-5 taps)
+    var tapHistory by remember { mutableStateOf<List<Offset>>(emptyList()) }
 
     val tapPingScale by animateFloatAsState(
         targetValue = if (tapPingOffset != null) 1f else 0f,
@@ -214,35 +217,67 @@ fun ScannerOverlay(
                             // Kiểm tra các Bounding Box mà điểm chạm tapOffset rơi vào diện tích (bao gồm cả thẻ tên)
                             val minDimension = 60.dp.toPx()
                             val badgeHeight = 36.dp.toPx()
-                            // Khi cầm điện thoại trên tay, vị trí ngón tay và bounding box thường bị xê dịch nhẹ (handheld jitter).
-                            // Tăng hitPadding rộng rãi (32dp) để người dùng chạm trúng dễ dàng ngay cả khi đang rung tay.
-                            val hitPadding = 32.dp.toPx()
+                             
+                            // Velocity-aware tap detection (Phase 3)
+                            // Calculate max velocity from all tracked objects
+                            val maxVelocity = if (trackedObjects.isNotEmpty()) {
+                                trackedObjects.maxOf { box ->
+                                    kotlin.math.sqrt(box.velocityX * box.velocityX + box.velocityY * box.velocityY)
+                                }
+                            } else {
+                                0f
+                            }
+                             
+                            // Kalman prediction: predict bounding box position at tap time
+                            val predictedObjects = trackedObjects.map { box ->
+                                val predX = box.normalizedRect.centerX() + box.velocityX * 0.033f
+                                val predY = box.normalizedRect.centerY() + box.velocityY * 0.033f
+                                val predWidth = box.normalizedRect.width()
+                                val predHeight = box.normalizedRect.height()
+                                box to RectF(
+                                    predX - predWidth / 2f,
+                                    predY - predHeight / 2f,
+                                    predX + predWidth / 2f,
+                                    predY + predHeight / 2f
+                                )
+                            }
+                             
+                            // Velocity scale for adaptive padding (1.0 to 2.5x)
+                            val velocityScale = (1f + maxVelocity * 2.5f).coerceIn(1f, 2.5f)
+                             
+                            // Dynamic hitPadding based on velocity (32dp to 64dp)
+                            val baseHitPadding = 32.dp.toPx()
+                            val hitPadding = baseHitPadding * velocityScale
+                             
+                            // Dynamic snappingRadius based on velocity (64dp to 96dp)
+                            val baseSnappingRadius = 64.dp.toPx()
+                            val snappingRadius = baseSnappingRadius * velocityScale
 
                             // Danh sách các box mà điểm chạm nằm trong diện tích của nó (bao gồm hitPadding)
-                            val directHitBoxes = trackedObjects.filter { box ->
-                                val left = box.normalizedRect.left * size.width
-                                val top = box.normalizedRect.top * size.height
-                                val rawRight = box.normalizedRect.right * size.width
-                                val rawBottom = box.normalizedRect.bottom * size.height
+                            // Using Kalman-predicted positions for more accurate tap detection
+                            val directHitBoxes = predictedObjects.filter { (box, predRect) ->
+                                val left = predRect.left * size.width
+                                val top = predRect.top * size.height
+                                val rawRight = predRect.right * size.width
+                                val rawBottom = predRect.bottom * size.height
                                 val right = maxOf(rawRight, left + minDimension)
                                 val bottom = maxOf(rawBottom, top + minDimension)
 
                                 tapOffset.x in (left - hitPadding)..(right + hitPadding) &&
                                 tapOffset.y in (top - badgeHeight - hitPadding)..(bottom + hitPadding)
-                            }
+                            }.map { it.first }
 
                             // Sticky Selection / Target Snapping (Hút điểm chạm thông minh):
                             // Nếu không chạm lọt hẳn vào trong khung, tính khoảng cách từ điểm chạm đến tâm hoặc mép hình chữ nhật gần nhất
-                            // Bán kính hút chạm R = 64dp (giúp chọn mục tiêu cực nhạy và dứt khoát trên điện thoại cầm tay)
-                            val snappingRadius = 64.dp.toPx()
+                            // Bán kính hút chạm R = dynamic based on velocity (giúp chọn mục tiêu cực nhạy và dứt khoát trên điện thoại cầm tay)
                             val hitBoxes = if (directHitBoxes.isNotEmpty()) {
                                 directHitBoxes
                             } else {
-                                val nearest = trackedObjects.mapNotNull { box ->
-                                    val left = box.normalizedRect.left * size.width
-                                    val top = box.normalizedRect.top * size.height
-                                    val rawRight = box.normalizedRect.right * size.width
-                                    val rawBottom = box.normalizedRect.bottom * size.height
+                                val nearest = predictedObjects.mapNotNull { (box, predRect) ->
+                                    val left = predRect.left * size.width
+                                    val top = predRect.top * size.height
+                                    val rawRight = predRect.right * size.width
+                                    val rawBottom = predRect.bottom * size.height
                                     val right = maxOf(rawRight, left + minDimension)
                                     val bottom = maxOf(rawBottom, top + minDimension)
 
@@ -271,16 +306,29 @@ fun ScannerOverlay(
                                 if (nearest != null) listOf(nearest) else emptyList()
                             }
 
-                            if (hitBoxes.isNotEmpty()) {
-                                if (hitBoxes.size == 1) {
-                                    // Chỉ chạm trúng 1 box duy nhất
-                                    val singleBox = hitBoxes.first()
-                                    if (selectedTrackId == singleBox.id) {
-                                        onSelectTrack(null) // Chạm lần 2: Bỏ chọn
-                                    } else {
-                                        onSelectTrack(singleBox.id) // Chọn box
-                                    }
-                                } else {
+                             if (hitBoxes.isNotEmpty()) {
+                                 // Temporal smoothing: Update tap history and use average position
+                                 val smoothedTapOffset = if (tapHistory.size >= 3) {
+                                     val newTapHistory = (tapHistory.drop(1) + listOf(tapOffset)).takeLast(5)
+                                     tapHistory = newTapHistory
+                                     Offset(
+                                         newTapHistory.map { it.x }.average().toFloat(),
+                                         newTapHistory.map { it.y }.average().toFloat()
+                                     )
+                                 } else {
+                                     tapHistory = (tapHistory + listOf(tapOffset)).takeLast(5)
+                                     tapOffset
+                                 }
+                                 
+                                 if (hitBoxes.size == 1) {
+                                     // Chỉ chạm trúng 1 box duy nhất
+                                     val singleBox = hitBoxes.first()
+                                     if (selectedTrackId == singleBox.id) {
+                                         onSelectTrack(null) // Chạm lần 2: Bỏ chọn
+                                     } else {
+                                         onSelectTrack(singleBox.id) // Chọn box
+                                     }
+                                 } else {
                                     // Chạm vào vùng lồng nhau giữa NHIỀU box:
                                     // Nếu box hiện tại đang được chọn nằm trong các box lồng nhau này:
                                     // Chuyển luân phiên sang box kế tiếp trong cụm lồng nhau;
