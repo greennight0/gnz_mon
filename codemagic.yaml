@@ -26,13 +26,18 @@ workflows:
 
           GRADLE_BIN="$TOOLS_DIR/gradle-${GRADLE_VERSION}/bin/gradle"
           test -x "$GRADLE_BIN"
-          export GRADLE_BIN
-          echo "export GRADLE_BIN=$GRADLE_BIN" >> "$CM_ENV"
+          printf 'GRADLE_BIN=%s\n' "$GRADLE_BIN" >> "$CM_ENV"
       - name: Build Android Debug APK
         script: |
+          set -euo pipefail
+          : "${GRADLE_BIN:?GRADLE_BIN was not restored from the bootstrap step}"
+          test -x "$GRADLE_BIN"
           "$GRADLE_BIN" :app:assembleDebug --no-daemon --stacktrace
       - name: Build Android Release APK (Optional)
         script: |
+          set -euo pipefail
+          : "${GRADLE_BIN:?GRADLE_BIN was not restored from the bootstrap step}"
+          test -x "$GRADLE_BIN"
           "$GRADLE_BIN" :app:assembleRelease --no-daemon --stacktrace
     artifacts:
       - app/build/outputs/apk/**/*.apk
