@@ -151,7 +151,7 @@ fun MysteriesOfNatureApp(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Camera Preview or Fallback Viewfinder
+            // Camera preview is only available after permission is granted.
             if (cameraPermissionState.status.isGranted) {
                 CameraPreviewView(
                     isFrontCamera = isFrontCamera,
@@ -167,90 +167,114 @@ fun MysteriesOfNatureApp(
                         // Keep viewfinder alive and provide fallback scan
                     }
                 )
-            } else {
-                // Camera Permission Fallback Canvas
-                CameraPermissionFallbackView(
-                    language = language,
-                    onRequestPermission = { cameraPermissionState.launchPermissionRequest() },
-                    onTryDemo = { viewModel.triggerDemoSampleScan() }
-                )
             }
 
-            // High-Tech Scanner HUD Overlay (Khung nhận diện & Khung theo dõi đối tượng / Bounding Box & Object Tracking Box)
-            ScannerOverlay(
-                detectedSpecies = detectedSpecies,
-                isAnalyzing = isAnalyzing,
+            CameraPermissionContent(
+                isCameraPermissionGranted = cameraPermissionState.status.isGranted,
                 language = language,
-                trackedObjects = trackedObjects,
-                selectedTrackId = selectedTrackId,
-                activeAlgorithm = activeAlgorithm,
-                inferenceLatencyMs = inferenceLatencyMs,
-                onAlgorithmToggle = { viewModel.toggleAlgorithm() },
-                onSelectTrack = { trackId -> viewModel.selectTrack(trackId) },
-                onSpeciesClick = { species ->
-                    viewModel.openSpeciesDetail(species)
-                },
-                onCaptureClick = {
-                    if (cameraPermissionState.status.isGranted && cameraController != null) {
-                        val instantBmp = cameraController?.previewView?.bitmap
-                        if (instantBmp != null) {
-                            viewModel.analyzeImage(instantBmp)
-                        } else {
-                            cameraController?.takePhoto()
-                        }
-                    } else {
-                        // Smart instant species recognition
-                        viewModel.triggerDemoSampleScan()
-                    }
-                },
-                onRescanTarget = {
-                    viewModel.rescanCurrentTarget()
-                    if (cameraPermissionState.status.isGranted && cameraController != null) {
-                        val instantBmp = cameraController?.previewView?.bitmap
-                        if (instantBmp != null) {
-                            viewModel.analyzeImage(instantBmp)
-                        } else {
-                            cameraController?.takePhoto()
-                        }
-                    } else {
-                        viewModel.triggerDemoSampleScan()
-                    }
-                },
-                onTapCreateOrMoveTarget = { normX, normY ->
-                    viewModel.createOrMoveTargetBox(normX, normY)
-                },
-                onDismissSpecies = {
-                    viewModel.dismissSpeciesTag()
-                },
-                onNextTrack = {
-                    viewModel.selectNextTrack()
-                },
-                isTorchEnabled = isTorchEnabled,
-                onTorchToggle = { viewModel.toggleTorch() },
-                onLanguageToggle = { viewModel.toggleLanguage() },
-                onSnsClick = { isSnsOpen = true }
-            )
-
-            // Compact Species Info Dialog (Kích thước gọn gàng, không full màn hình)
-            selectedSpeciesDetail?.let { species ->
-                SpeciesDetailSheet(
-                    species = species,
+                onRequestPermission = cameraPermissionState::launchPermissionRequest,
+                onTryDemo = viewModel::triggerDemoSampleScan
+            ) {
+                // High-Tech Scanner HUD Overlay (Khung nhận diện & Khung theo dõi đối tượng / Bounding Box & Object Tracking Box)
+                ScannerOverlay(
+                    detectedSpecies = detectedSpecies,
+                    isAnalyzing = isAnalyzing,
                     language = language,
-                    onDismiss = {
-                        viewModel.closeSpeciesDetail()
-                    }
+                    trackedObjects = trackedObjects,
+                    selectedTrackId = selectedTrackId,
+                    activeAlgorithm = activeAlgorithm,
+                    inferenceLatencyMs = inferenceLatencyMs,
+                    onAlgorithmToggle = { viewModel.toggleAlgorithm() },
+                    onSelectTrack = { trackId -> viewModel.selectTrack(trackId) },
+                    onSpeciesClick = { species ->
+                        viewModel.openSpeciesDetail(species)
+                    },
+                    onCaptureClick = {
+                        if (cameraPermissionState.status.isGranted && cameraController != null) {
+                            val instantBmp = cameraController?.previewView?.bitmap
+                            if (instantBmp != null) {
+                                viewModel.analyzeImage(instantBmp)
+                            } else {
+                                cameraController?.takePhoto()
+                            }
+                        } else {
+                            // Smart instant species recognition
+                            viewModel.triggerDemoSampleScan()
+                        }
+                    },
+                    onRescanTarget = {
+                        viewModel.rescanCurrentTarget()
+                        if (cameraPermissionState.status.isGranted && cameraController != null) {
+                            val instantBmp = cameraController?.previewView?.bitmap
+                            if (instantBmp != null) {
+                                viewModel.analyzeImage(instantBmp)
+                            } else {
+                                cameraController?.takePhoto()
+                            }
+                        } else {
+                            viewModel.triggerDemoSampleScan()
+                        }
+                    },
+                    onTapCreateOrMoveTarget = { normX, normY ->
+                        viewModel.createOrMoveTargetBox(normX, normY)
+                    },
+                    onDismissSpecies = {
+                        viewModel.dismissSpeciesTag()
+                    },
+                    onNextTrack = {
+                        viewModel.selectNextTrack()
+                    },
+                    isTorchEnabled = isTorchEnabled,
+                    onTorchToggle = { viewModel.toggleTorch() },
+                    onLanguageToggle = { viewModel.toggleLanguage() },
+                    onSnsClick = { isSnsOpen = true }
                 )
             }
 
-            // GNZ Social Networks & Community Dialog (SNS)
-            if (isSnsOpen) {
-                SnsDialog(
-                    socialLinks = viewModel.socialLinks,
-                    language = language,
-                    onDismiss = { isSnsOpen = false }
-                )
+            if (cameraPermissionState.status.isGranted) {
+                // Compact Species Info Dialog (Kích thước gọn gàng, không full màn hình)
+                selectedSpeciesDetail?.let { species ->
+                    SpeciesDetailSheet(
+                        species = species,
+                        language = language,
+                        onDismiss = {
+                            viewModel.closeSpeciesDetail()
+                        }
+                    )
+                }
+
+                // GNZ Social Networks & Community Dialog (SNS)
+                if (isSnsOpen) {
+                    SnsDialog(
+                        socialLinks = viewModel.socialLinks,
+                        language = language,
+                        onDismiss = { isSnsOpen = false }
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * Keeps the permission fallback as the only interactive content until camera access is granted.
+ */
+@Composable
+fun CameraPermissionContent(
+    isCameraPermissionGranted: Boolean,
+    language: AppLanguage,
+    onRequestPermission: () -> Unit,
+    onTryDemo: () -> Unit,
+    scannerOverlay: @Composable () -> Unit
+) {
+    if (isCameraPermissionGranted) {
+        scannerOverlay()
+    } else {
+        CameraPermissionFallbackView(
+            language = language,
+            onRequestPermission = onRequestPermission,
+            onTryDemo = onTryDemo
+        )
     }
 }
 
