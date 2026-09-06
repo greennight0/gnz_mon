@@ -1,7 +1,7 @@
 Codemagic Android APK build
 
 Overview
-This project uses Gradle (Kotlin DSL) to build a native Android APK. Codemagic can run the provided codemagic.yaml workflow to assemble Debug/Release APKs.
+This project uses Gradle (Kotlin DSL) to build a native Android APK. Codemagic can run the provided codemagic.yaml workflow to assemble Debug/Release APKs. The workflow downloads Gradle 9.3.1 at runtime so builds do not depend on the Gradle version preinstalled on the Codemagic build image.
 
 Local development
 - Create a local .env (ignored by git) or set environment variables in the shell before running Gradle.
@@ -12,9 +12,9 @@ Codemagic setup
 2. Verify the codemagic.yaml workflow is set to build the APK.
 
 Running the build
-- The repo includes codemagic.yaml which runs:
-  gradle :app:assembleDebug
-  gradle :app:assembleRelease
+- The repo includes codemagic.yaml, which bootstraps Gradle 9.3.1 and runs:
+  "$GRADLE_BIN" :app:assembleDebug --no-daemon --stacktrace
+  "$GRADLE_BIN" :app:assembleRelease --no-daemon --stacktrace
 - Artifacts are saved from app/build/outputs/apk/**/*.apk
 
 Verification
