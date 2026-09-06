@@ -9,15 +9,31 @@ workflows:
       groups:
         - google_credentials
     scripts:
-      - name: Set up environment and permissions
+      - name: Bootstrap Gradle 9.3.1
         script: |
-          chmod +x gradlew || true
+          set -euo pipefail
+          GRADLE_VERSION="9.3.1"
+          TOOLS_DIR="$CM_BUILD_DIR/.tools"
+          TEMP_DIR="$(mktemp -d)"
+          ARCHIVE="$TEMP_DIR/gradle-${GRADLE_VERSION}-bin.zip"
+          trap 'rm -rf "$TEMP_DIR"' EXIT
+
+          mkdir -p "$TOOLS_DIR"
+          curl --fail --location \
+            --output "$ARCHIVE" \
+            "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+          unzip -q "$ARCHIVE" -d "$TOOLS_DIR"
+
+          GRADLE_BIN="$TOOLS_DIR/gradle-${GRADLE_VERSION}/bin/gradle"
+          test -x "$GRADLE_BIN"
+          export GRADLE_BIN
+          echo "export GRADLE_BIN=$GRADLE_BIN" >> "$CM_ENV"
       - name: Build Android Debug APK
         script: |
-          gradle :app:assembleDebug --no-daemon --stacktrace
+          "$GRADLE_BIN" :app:assembleDebug --no-daemon --stacktrace
       - name: Build Android Release APK (Optional)
         script: |
-          gradle :app:assembleRelease --no-daemon --stacktrace || true
+          "$GRADLE_BIN" :app:assembleRelease --no-daemon --stacktrace
     artifacts:
       - app/build/outputs/apk/**/*.apk
     publishing:
