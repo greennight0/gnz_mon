@@ -162,9 +162,6 @@ fun ScannerOverlay(
     var userTargetOffset by remember { mutableStateOf<Offset?>(null) }
     var tapPingOffset by remember { mutableStateOf<Offset?>(null) }
     
-    // Tap history for temporal smoothing (keep last 3-5 taps)
-    var tapHistory by remember { mutableStateOf<List<Offset>>(emptyList()) }
-
     val tapPingScale by animateFloatAsState(
         targetValue = if (tapPingOffset != null) 1f else 0f,
         animationSpec = tween(450, easing = FastOutSlowInEasing),
@@ -209,10 +206,7 @@ fun ScannerOverlay(
                 .fillMaxSize()
                 .pointerInput(trackedObjects, selectedTrackId) {
                     detectTapGestures { tapOffset ->
-                        val topSafeZone = 110.dp.toPx()
-                        val bottomSafeZone = size.height - 120.dp.toPx()
-                        if (tapOffset.y in topSafeZone..bottomSafeZone) {
-                            tapPingOffset = tapOffset
+                        tapPingOffset = tapOffset
 
                             // Kiểm tra các Bounding Box mà điểm chạm tapOffset rơi vào diện tích (bao gồm cả thẻ tên)
                             val minDimension = 60.dp.toPx()
@@ -245,13 +239,13 @@ fun ScannerOverlay(
                             // Velocity scale for adaptive padding (1.0 to 2.5x)
                             val velocityScale = (1f + maxVelocity * 2.5f).coerceIn(1f, 2.5f)
                              
-                            // Dynamic hitPadding based on velocity (32dp to 64dp)
-                            val baseHitPadding = 32.dp.toPx()
+                            // A 48dp baseline accounts for the fingertip occluding the target.
+                            val baseHitPadding = 48.dp.toPx()
                             val hitPadding = baseHitPadding * velocityScale
                              
-                            // Dynamic snappingRadius based on velocity (64dp to 96dp)
-                            val baseSnappingRadius = 64.dp.toPx()
-                            val snappingRadius = baseSnappingRadius * velocityScale
+                            // If a fingertip misses the box, use a generous nearest-neighbour
+                            // target. This deliberately does not depend on a small edge radius.
+                            val snappingRadius = 160.dp.toPx() * velocityScale
 
                             // Danh sách các box mà điểm chạm nằm trong diện tích của nó (bao gồm hitPadding)
                             // Using Kalman-predicted positions for more accurate tap detection
@@ -307,19 +301,6 @@ fun ScannerOverlay(
                             }
 
                              if (hitBoxes.isNotEmpty()) {
-                                 // Temporal smoothing: Update tap history and use average position
-                                 val smoothedTapOffset = if (tapHistory.size >= 3) {
-                                     val newTapHistory = (tapHistory.drop(1) + listOf(tapOffset)).takeLast(5)
-                                     tapHistory = newTapHistory
-                                     Offset(
-                                         newTapHistory.map { it.x }.average().toFloat(),
-                                         newTapHistory.map { it.y }.average().toFloat()
-                                     )
-                                 } else {
-                                     tapHistory = (tapHistory + listOf(tapOffset)).takeLast(5)
-                                     tapOffset
-                                 }
-                                 
                                  if (hitBoxes.size == 1) {
                                      // Chỉ chạm trúng 1 box duy nhất
                                      val singleBox = hitBoxes.first()
@@ -360,7 +341,6 @@ fun ScannerOverlay(
                                     onSelectTrack(null)
                                 }
                             }
-                        }
                     }
                 }
         )
