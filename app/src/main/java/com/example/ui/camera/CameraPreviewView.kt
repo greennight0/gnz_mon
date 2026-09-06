@@ -3,6 +3,7 @@ package com.example.ui.camera
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.graphics.RectF
 import android.util.Log
 import android.view.ViewGroup
 import androidx.camera.core.Camera
@@ -11,9 +12,11 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.ImageProxyTransformFactory
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.camera.view.transform.CoordinateTransform
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -179,8 +182,11 @@ fun CameraPreviewView(
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                     .build()
 
-                val analyzer = ObjectDetectorAnalyzer { boxes, latency ->
-                    onObjectsTracked(boxes, latency)
+                val analyzer = ObjectDetectorAnalyzer { boxes, latency, imageProxy ->
+                    onObjectsTracked(
+                        mapBoxesToPreview(boxes, imageProxy, previewView),
+                        latency
+                    )
                 }
                 cameraController.currentAnalyzer?.close()
                 cameraController.currentAnalyzer = analyzer
@@ -252,6 +258,57 @@ fun CameraPreviewView(
                         )
                     )
                 )
+        )
+    }
+}
+
+/**
+ * Maps ML Kit boxes from the ImageAnalysis buffer into the exact, cropped PreviewView space.
+ *
+ * PreviewView uses FILL_CENTER, so scaling normalized analysis coordinates directly to the
+ * Compose overlay is incorrect on most phone aspect ratios. CameraX owns the crop, rotation,
+ * and mirroring matrices; using the paired output transforms keeps drawing, tapping, and the
+ * camera image in the same coordinate system.
+ */
+private fun mapBoxesToPreview(
+    boxes: List<TrackedBoundingBox>,
+    imageProxy: ImageProxy,
+    previewView: PreviewView
+): List<TrackedBoundingBox> {
+    val previewTransform = previewView.outputTransform ?: return boxes
+    if (previewView.width <= 0 || previewView.height <= 0) return boxes
+
+    val imageTransform = ImageProxyTransformFactory().apply {
+        isUsingCropRect = true
+        isUsingRotationDegrees = true
+    }.getOutputTransform(imageProxy)
+    val coordinateTransform = CoordinateTransform(imageTransform, previewTransform)
+    val imageWidth = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) {
+        imageProxy.width.toFloat()
+    } else {
+        imageProxy.height.toFloat()
+    }
+    val imageHeight = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) {
+        imageProxy.height.toFloat()
+    } else {
+        imageProxy.width.toFloat()
+    }
+
+    return boxes.map { box ->
+        val sourceRect = RectF(
+            box.normalizedRect.left * imageWidth,
+            box.normalizedRect.top * imageHeight,
+            box.normalizedRect.right * imageWidth,
+            box.normalizedRect.bottom * imageHeight
+        )
+        coordinateTransform.mapRect(sourceRect)
+        box.copy(
+            normalizedRect = RectF(
+                sourceRect.left / previewView.width,
+                sourceRect.top / previewView.height,
+                sourceRect.right / previewView.width,
+                sourceRect.bottom / previewView.height
+            )
         )
     }
 }

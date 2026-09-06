@@ -19,7 +19,11 @@ import kotlin.math.abs
  * Hoạt động ở STREAM_MODE, tự động phát hiện đa đối tượng và gán Tracking ID liên tục qua các khung hình.
  */
 class ObjectDetectorAnalyzer(
-    private val onObjectsTracked: (List<TrackedBoundingBox>, Int) -> Unit
+    /**
+     * Delivers boxes while the [ImageProxy] is still open.  The caller can use its CameraX
+     * transform metadata to map detections into the PreviewView coordinate system.
+     */
+    private val onObjectsTracked: (List<TrackedBoundingBox>, Int, ImageProxy) -> Unit
 ) : ImageAnalysis.Analyzer {
 
     private val options = ObjectDetectorOptions.Builder()
@@ -206,7 +210,7 @@ class ObjectDetectorAnalyzer(
             .addOnSuccessListener { detectedObjects ->
                 val latency = (System.currentTimeMillis() - startTime).toInt()
                 val trackedList = processDetectedObjects(detectedObjects, imageW, imageH)
-                onObjectsTracked(trackedList, latency)
+                onObjectsTracked(trackedList, latency, imageProxy)
             }
             .addOnFailureListener { e ->
                 Log.w("ObjectDetectorAnalyzer", "Detection failed", e)
