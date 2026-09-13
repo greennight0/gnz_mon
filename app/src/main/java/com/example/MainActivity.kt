@@ -182,7 +182,7 @@ fun MysteriesOfNatureApp(
         val view = controller?.previewView
         if (clickTrackId == null || clickRect == null) {
             viewModel.requireTargetSelection()
-        } else if (view != null && view.width > 0 && view.height > 0) {
+        } else if (controller != null && view != null && view.width > 0 && view.height > 0) {
             if (!viewModel.beginCapture(clickTrackId, clickRect)) return
             val previewRect = android.graphics.RectF(
                 clickRect.left * view.width, clickRect.top * view.height,
