@@ -14,6 +14,7 @@ import androidx.compose.ui.test.assertTopPositionInRootIsEqualTo
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AppLanguage
@@ -60,12 +61,14 @@ class TrackSelectorTest {
     }
 
     @Test
-    fun topSectionDoesNotReserveSpaceForRemovedTelemetryBar() {
+    fun scannerDoesNotExposeAlgorithmSelectionControl() {
         setOverlayContent {}
 
         composeRule.onNodeWithTag("ai_telemetry_hud_bar").assertDoesNotExist()
         composeRule.onNodeWithContentDescription("Toggle Algorithm").assertDoesNotExist()
         composeRule.onNodeWithContentDescription("Technology Info").assertDoesNotExist()
+        composeRule.onNodeWithText("BYTETracker", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("DeepSORT", substring = true).assertDoesNotExist()
         composeRule.onNodeWithTag("app_brand_badge")
             .assertExists()
             .assertTopPositionInRootIsEqualTo(36.dp)

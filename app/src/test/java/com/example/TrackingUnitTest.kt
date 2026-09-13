@@ -3,10 +3,8 @@ package com.example
 import android.app.Application
 import android.graphics.RectF
 import com.example.data.model.TrackedBoundingBox
-import com.example.data.model.TrackingAlgorithm
 import com.example.ui.MainViewModel
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -18,19 +16,6 @@ import kotlin.math.abs
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TrackingUnitTest {
-
-    @Test
-    fun testTrackingAlgorithmsConfigured() {
-        val yolo = TrackingAlgorithm.YOLO_BYTE_TRACKER
-        assertEquals("YOLOv8 + BYTETracker", yolo.titleEn)
-        assertTrue(yolo.latencyMs in 10..20)
-        assertNotNull(yolo.descriptionVi)
-
-        val ssd = TrackingAlgorithm.SSD_DEEP_SORT
-        assertEquals("SSD MobileNet + DeepSORT", ssd.titleEn)
-        assertTrue(ssd.latencyMs in 15..30)
-        assertNotNull(ssd.descriptionVi)
-    }
 
     @Test
     fun testTrackedBoundingBoxModel() {
@@ -58,12 +43,6 @@ class TrackingUnitTest {
     fun testViewModelTrackingState() {
         val app = RuntimeEnvironment.getApplication()
         val viewModel = MainViewModel(app)
-
-        assertEquals(TrackingAlgorithm.YOLO_BYTE_TRACKER, viewModel.activeAlgorithm.value)
-        viewModel.toggleAlgorithm()
-        assertEquals(TrackingAlgorithm.SSD_DEEP_SORT, viewModel.activeAlgorithm.value)
-        viewModel.toggleAlgorithm()
-        assertEquals(TrackingAlgorithm.YOLO_BYTE_TRACKER, viewModel.activeAlgorithm.value)
 
         // Test object tracking update
         val mockBoxes = listOf(
@@ -283,4 +262,3 @@ class TrackingUnitTest {
         assertTrue("Tap should be within adaptive padding radius", distToCenter < hitPadding * 1.5f)
     }
 }
-
