@@ -81,19 +81,35 @@ internal class GeometryTracker {
     private var nextId = 200
 
     fun update(result: ObjectDetectorResult, width: Float, height: Float, threshold: Float): List<TrackedBoundingBox> {
+        val detections = result.detections().map { detection ->
+            val b = detection.boundingBox()
+            DetectorOutput(
+                box = RectF(b.left / width, b.top / height, b.right / width, b.bottom / height),
+                score = detection.categories().firstOrNull()?.score() ?: 0f
+            )
+        }
+        return update(detections, threshold)
+    }
+
+    internal fun update(detections: List<DetectorOutput>, threshold: Float): List<TrackedBoundingBox> {
         val now = System.currentTimeMillis()
         tracks.removeAll { now - it.seen > 1500 }
         val used = mutableSetOf<Int>()
-        return result.detections().mapNotNull { detection ->
-            val score = detection.categories().firstOrNull()?.score() ?: 0f
+        return detections.mapNotNull { detection ->
+            val score = detection.score
             if (score < threshold) return@mapNotNull null
-            val b = detection.boundingBox()
-            val measured = RectF(b.left / width, b.top / height, b.right / width, b.bottom / height)
+            val measured = detection.box
             val track = tracks.filter { it.id !in used }.maxByOrNull { iou(it.box, measured) }
                 ?.takeIf { iou(it.box, measured) >= .25f }
                 ?: Track(nextId++, measured, 0, now).also(tracks::add)
             track.box = measured; track.frames++; track.seen = now; used += track.id
-            TrackedBoundingBox(track.id, RectF(measured), "Detected object", score, track.frames, 0f, 0f)
+            TrackedBoundingBox(
+                id = track.id,
+                normalizedRect = RectF(measured),
+                label = "Detected object",
+                confidence = score,
+                trackingFrames = track.frames
+            )
         }
     }
 

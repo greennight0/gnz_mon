@@ -39,6 +39,17 @@ class EfficientDetEngineTest {
         assertRect(RectF(.1f, .1f, .9f, .8f), normalizePreviewRect(RectF(100f, 200f, 900f, 1600f), 1000, 2000))
     }
 
+    @Test fun matchedDetectionIncrementsTrackingFramesAndRemainsUnselected() {
+        val tracker = GeometryTracker()
+        val detection = DetectorOutput(RectF(.1f, .2f, .4f, .6f), .9f)
+
+        tracker.update(listOf(detection), threshold = .35f)
+        val matched = tracker.update(listOf(detection), threshold = .35f).single()
+
+        assertEquals(2, matched.trackingFrames)
+        assertEquals(false, matched.isSelected)
+    }
+
     @Test fun initializationFailureFallsBackWithoutStoppingAnalysis() {
         var reported: Exception? = null
         val fallback = createDetectorEngine({ reported = it }) { error("corrupt model") }
