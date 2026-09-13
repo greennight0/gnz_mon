@@ -67,7 +67,14 @@ class EfficientDetLiteEngine private constructor(
                 try {
                     detector.detect(mpImage)
                 } catch (error: Exception) {
-                    throw PermanentDetectorException("Object detector runtime failed", error)
+                    // Most exceptions here describe just this frame (for example an invalid
+                    // bitmap) and CameraX can safely continue with the next image. Only promote
+                    // the well-known closed TaskRunner state; a closed native runner cannot be
+                    // made usable by supplying different input.
+                    if (error.isClosedDetectorRuntime()) {
+                        throw PermanentDetectorException("Object detector runtime is closed", error)
+                    }
+                    throw error
                 } catch (error: LinkageError) {
                     // An ABI/JNI mismatch is permanent for this process. Do not catch Error as a
                     // whole: OutOfMemoryError must not be converted into a recoverable frame error.
@@ -82,6 +89,15 @@ class EfficientDetLiteEngine private constructor(
             // engine-owned and reused; only the per-frame source is released here.
             source.recycle()
         }
+    }
+
+    private fun Exception.isClosedDetectorRuntime(): Boolean {
+        val details = generateSequence<Throwable>(this) { it.cause }
+            .joinToString(" ") { it.message.orEmpty() }
+            .lowercase()
+        return details.contains("task runner is currently not running") ||
+            details.contains("task runner has been closed") ||
+            details.contains("object detector has been closed")
     }
 
     private fun obtainRotatedBuffer(source: Bitmap, rotation: Int): Bitmap {

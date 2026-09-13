@@ -15,6 +15,8 @@ class ObjectDetectorAnalyzer(
 ) : ImageAnalysis.Analyzer {
     private var lastInferenceStartedAt = Long.MIN_VALUE
     @Volatile private var detectorFailedPermanently = false
+    internal var consecutiveFrameFailures: Int = 0
+        private set
 
     override fun analyze(image: ImageProxy) {
         val started = clockMillis()
@@ -24,12 +26,18 @@ class ObjectDetectorAnalyzer(
                 started - lastInferenceStartedAt < minimumInferenceIntervalMs
             ) return
             lastInferenceStartedAt = started
-            onObjectsTracked(engine.detect(image), (clockMillis() - started).toInt(), image)
+            val boxes = engine.detect(image)
+            consecutiveFrameFailures = 0
+            onObjectsTracked(boxes, (clockMillis() - started).toInt(), image)
         } catch (error: Exception) {
-            // A bad frame must not kill CameraX's executor. An engine failure, however, cannot
-            // recover by processing more frames; leave it paused until CameraPreviewView replaces
-            // this analyzer after an explicit retry.
-            if (error is PermanentDetectorException) detectorFailedPermanently = true
+            // Bad image data applies only to this frame. Keep the analyzer alive and retain the
+            // count for telemetry/retry policy; only an explicitly classified runtime/model
+            // failure pauses inference until CameraPreviewView replaces this analyzer.
+            if (error is PermanentDetectorException) {
+                detectorFailedPermanently = true
+            } else {
+                consecutiveFrameFailures++
+            }
             Log.w(TAG, "Offline object detection failed", error)
             onDetectionError(error)
         } finally {
