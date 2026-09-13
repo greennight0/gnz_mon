@@ -59,8 +59,10 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.AppLanguage
 import com.example.data.model.AppThemeMode
 import com.example.ui.MainViewModel
+import com.example.ui.ScanRequest
 import com.example.ui.camera.CameraController
 import com.example.ui.camera.CameraPreviewView
+import com.example.ui.camera.TargetCaptureRequest
 import com.example.ui.components.ScannerOverlay
 import com.example.ui.components.SnsDialog
 import com.example.ui.components.SpeciesDetailSheet
@@ -112,6 +114,7 @@ fun MysteriesOfNatureApp(
     val trackedObjects by viewModel.trackedObjects.collectAsState()
     val selectedTrackId by viewModel.selectedTrackId.collectAsState()
     val recognitionError by viewModel.recognitionError.collectAsState()
+    val targetSelectionRequired by viewModel.targetSelectionRequired.collectAsState()
     val notOrganism by viewModel.notOrganism.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -130,7 +133,8 @@ fun MysteriesOfNatureApp(
                 if (inputStream != null) {
                     inputStream.use {
                         val bitmap = BitmapFactory.decodeStream(inputStream)
-                        if (bitmap != null) viewModel.analyzeImage(bitmap)
+                        // Gallery images are explicit whole-image scans, not a live tracking fallback.
+                        if (bitmap != null) viewModel.analyzeImage(ScanRequest(Int.MIN_VALUE, bitmap))
                         else viewModel.reportRecognitionError()
                     }
                 } else {
@@ -156,6 +160,39 @@ fun MysteriesOfNatureApp(
         }
     }
 
+    LaunchedEffect(targetSelectionRequired, language) {
+        if (targetSelectionRequired) {
+            snackbarHostState.showSnackbar(
+                if (language == AppLanguage.VIETNAMESE) "Vui lòng chọn một box mục tiêu trước khi quét."
+                else "Please select a target box before scanning."
+            )
+            viewModel.clearTargetSelectionRequired()
+        }
+    }
+
+    fun captureSelectedTarget() {
+        // Copy both values synchronously. Tracking may publish another list during capture.
+        val clickTrackId = selectedTrackId
+        val clickRect = clickTrackId?.let { id ->
+            trackedObjects.firstOrNull { it.id == id }?.normalizedRect?.let(::android.graphics.RectF)
+        }
+        val controller = cameraController
+        val view = controller?.previewView
+        if (clickTrackId == null || clickRect == null) {
+            viewModel.requireTargetSelection()
+        } else if (view != null && view.width > 0 && view.height > 0) {
+            val previewRect = android.graphics.RectF(
+                clickRect.left * view.width, clickRect.top * view.height,
+                clickRect.right * view.width, clickRect.bottom * view.height
+            )
+            controller.captureTarget(TargetCaptureRequest(clickTrackId, previewRect)) { snapshot ->
+                viewModel.analyzeImage(ScanRequest(snapshot.trackId, snapshot.bitmap))
+            }
+        } else {
+            viewModel.reportRecognitionError(IllegalStateException("Camera preview is not ready"))
+        }
+    }
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -178,7 +215,8 @@ fun MysteriesOfNatureApp(
                         viewModel.onObjectsTracked(boxes, latency)
                     },
                     onImageCaptured = { bitmap ->
-                        viewModel.analyzeImage(bitmap)
+                        selectedTrackId?.let { viewModel.analyzeImage(ScanRequest(it, bitmap)) }
+                            ?: viewModel.requireTargetSelection()
                     },
                     onError = { viewModel.reportRecognitionError(it) }
                 )
@@ -203,12 +241,7 @@ fun MysteriesOfNatureApp(
                     },
                     onCaptureClick = {
                         if (cameraPermissionState.status.isGranted && cameraController != null) {
-                            val instantBmp = cameraController?.previewView?.bitmap
-                            if (instantBmp != null) {
-                                viewModel.analyzeImage(instantBmp)
-                            } else {
-                                cameraController?.takePhoto()
-                            }
+                            captureSelectedTarget()
                         } else {
                             cameraPermissionState.launchPermissionRequest()
                         }
@@ -216,12 +249,7 @@ fun MysteriesOfNatureApp(
                     onRescanTarget = {
                         viewModel.rescanCurrentTarget()
                         if (cameraPermissionState.status.isGranted && cameraController != null) {
-                            val instantBmp = cameraController?.previewView?.bitmap
-                            if (instantBmp != null) {
-                                viewModel.analyzeImage(instantBmp)
-                            } else {
-                                cameraController?.takePhoto()
-                            }
+                            captureSelectedTarget()
                         } else {
                             cameraPermissionState.launchPermissionRequest()
                         }
