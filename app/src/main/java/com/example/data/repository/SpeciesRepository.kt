@@ -128,22 +128,6 @@ class SpeciesRepository(context: Context) {
                 category = "Fediverse"
             ),
             SocialLink(
-                id = "github",
-                name = "GitHub Source Repo",
-                handle = "Download & Fork Source",
-                url = "https://github.com",
-                iconName = "github",
-                category = "Development"
-            ),
-            SocialLink(
-                id = "codemagic",
-                name = "Codemagic CI/CD",
-                handle = "Automated APK Pipeline",
-                url = "https://codemagic.io",
-                iconName = "codemagic",
-                category = "Building & Deploy"
-            ),
-            SocialLink(
                 id = "gumroad",
                 name = "Gumroad Store",
                 handle = "Buy & Support GNZ MON",
