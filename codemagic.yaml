@@ -32,24 +32,18 @@ workflows:
           set -euo pipefail
           : "${GRADLE_BIN:?GRADLE_BIN was not restored from the bootstrap step}"
           test -x "$GRADLE_BIN"
-          COMPILE_LOG="$CM_BUILD_DIR/compile-debug-kotlin.log"
+          ASSEMBLE_LOG="$CM_BUILD_DIR/assemble-debug.log"
 
           set +e
-          "$GRADLE_BIN" :app:compileDebugKotlin --no-daemon --stacktrace --console=plain 2>&1 | tee "$COMPILE_LOG"
+          "$GRADLE_BIN" :app:assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee "$ASSEMBLE_LOG"
           GRADLE_EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
-          rg -n -C 10 'e:|error:|\.kt' "$COMPILE_LOG" || true
+          rg -n -C 10 'e:|error:|\.kt' "$ASSEMBLE_LOG" || true
           exit "$GRADLE_EXIT_CODE"
-      - name: Build Android Release APK (Optional)
-        script: |
-          set -euo pipefail
-          : "${GRADLE_BIN:?GRADLE_BIN was not restored from the bootstrap step}"
-          test -x "$GRADLE_BIN"
-          "$GRADLE_BIN" :app:assembleRelease --no-daemon --stacktrace
     artifacts:
-      - app/build/outputs/apk/**/*.apk
-      - $CM_BUILD_DIR/compile-debug-kotlin.log
+      - app/build/outputs/apk/debug/app-debug.apk
+      - $CM_BUILD_DIR/assemble-debug.log
     publishing:
       email:
         recipients:
