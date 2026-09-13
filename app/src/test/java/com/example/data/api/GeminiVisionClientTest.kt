@@ -12,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONObject
 import java.io.IOException
 import java.net.SocketTimeoutException
 import org.junit.runner.RunWith
@@ -52,14 +53,14 @@ class GeminiVisionClientTest {
     fun `organism missing taxonomy is rejected instead of defaulting to plant`() {
         val result = client.parseSpeciesJson(validOrganismJson().replace("\"family\":\"Passeridae\",", ""))
 
-        assertFailure(result, ScanFailureReason.InvalidResponse)
+        assertFailure(result, ScanFailureReason.MissingRequiredField("family"))
     }
 
     @Test
     fun `kingdom inconsistent taxonomy is rejected`() {
         val result = client.parseSpeciesJson(validOrganismJson().replace("Animalia", "Plantae"))
 
-        assertFailure(result, ScanFailureReason.InvalidResponse)
+        assertFailure(result, ScanFailureReason.InconsistentTaxonomy("BIRD", "Plantae"))
     }
 
     @Test
@@ -84,14 +85,14 @@ class GeminiVisionClientTest {
     )
 
     @Test fun `invalid json has its own category`() = assertFailure(
-        client.parseApiResponse(200, true, "not json"), ScanFailureReason.InvalidResponse
+        client.parseApiResponse(200, true, "not json"), ScanFailureReason.MalformedJson
     )
 
     @Test fun `malformed response log contains safe diagnostics only`() {
         ShadowLog.clear()
         val sensitiveBody = "not-json-API_KEY_secret-imageBase64"
 
-        assertFailure(client.parseApiResponse(422, true, sensitiveBody), ScanFailureReason.InvalidResponse)
+        assertFailure(client.parseApiResponse(422, true, sensitiveBody), ScanFailureReason.MalformedJson)
 
         val log = ShadowLog.getLogsForTag("GeminiVisionClient").joinToString { it.msg }
         assertTrue(log.contains("httpStatus=422"))
@@ -105,7 +106,7 @@ class GeminiVisionClientTest {
         ShadowLog.clear()
         val json = validOrganismJson().replace("\"family\":\"Passeridae\",", "")
 
-        assertFailure(client.parseSpeciesJson(json), ScanFailureReason.InvalidResponse)
+        assertFailure(client.parseSpeciesJson(json), ScanFailureReason.MissingRequiredField("family"))
 
         val log = ShadowLog.getLogsForTag("GeminiVisionClient").joinToString { it.msg }
         assertTrue(log.contains("httpStatus=200"))
@@ -126,6 +127,52 @@ class GeminiVisionClientTest {
         ScanFailureReason.LowConfidence(60)
     )
 
+    @Test fun `response schema describes both branches enum and confidence limits`() {
+        val schema = client.createGenerationConfig().getJSONObject("responseSchema")
+        val properties = schema.getJSONObject("properties")
+        assertEquals(0, properties.getJSONObject("confidenceScore").getInt("minimum"))
+        assertEquals(100, properties.getJSONObject("confidenceScore").getInt("maximum"))
+        assertEquals(7, properties.getJSONObject("category").getJSONArray("enum").length())
+        assertEquals(2, schema.getJSONArray("anyOf").length())
+    }
+
+    @Test fun `empty candidates is diagnosed`() = assertFailure(
+        client.parseApiResponse(200, true, """{"candidates":[]}"""),
+        ScanFailureReason.NoCandidates
+    )
+
+    @Test fun `all content parts are joined before parsing`() {
+        val json = validOrganismJson()
+        val midpoint = json.length / 2
+        val response = apiResponse(listOf(json.substring(0, midpoint), json.substring(midpoint)))
+        assertTrue(client.parseApiResponse(200, true, response) is RecognitionResult.Organism)
+    }
+
+    @Test fun `max tokens with cut json is diagnosed as truncation`() = assertFailure(
+        client.parseApiResponse(200, true, apiResponse(listOf("{\"isLivingOrganism\":true"), "MAX_TOKENS")),
+        ScanFailureReason.TruncatedResponse
+    )
+
+    @Test fun `every required organism field is diagnosed by name`() {
+        val required = client.createGenerationConfig().getJSONObject("responseSchema")
+            .getJSONArray("anyOf").getJSONObject(1).getJSONArray("required")
+        for (index in 0 until required.length()) {
+            val field = required.getString(index)
+            val fixture = JSONObject(validOrganismJson()).apply { remove(field) }.toString()
+            assertFailure(client.parseSpeciesJson(fixture), ScanFailureReason.MissingRequiredField(field))
+        }
+    }
+
+    @Test fun `unknown category has diagnostic`() = assertFailure(
+        client.parseSpeciesJson(validOrganismJson().replace("\"BIRD\"", "\"ROBOT\"")),
+        ScanFailureReason.UnknownCategory("ROBOT")
+    )
+
+    @Test fun `safety finish reason is diagnosed without parsing content`() = assertFailure(
+        client.parseApiResponse(200, true, apiResponse(listOf("secret response"), "SAFETY")),
+        ScanFailureReason.SafetyBlocked
+    )
+
     private fun assertFailure(result: RecognitionResult, expected: ScanFailureReason) {
         assertTrue(result is RecognitionResult.Failure)
         assertEquals(expected, ((result as RecognitionResult.Failure).error as ScanException).reason)
@@ -137,6 +184,15 @@ class GeminiVisionClientTest {
         )
         assertEquals(RecognitionResult.NotOrganism(label, confidence), result)
     }
+
+    private fun apiResponse(parts: List<String>, finishReason: String = "STOP"): String =
+        JSONObject().put("candidates", org.json.JSONArray().put(
+            JSONObject()
+                .put("finishReason", finishReason)
+                .put("content", JSONObject().put("parts", org.json.JSONArray().apply {
+                    parts.forEach { put(JSONObject().put("text", it)) }
+                }))
+        )).toString()
 
     private fun validOrganismJson() = """
         {

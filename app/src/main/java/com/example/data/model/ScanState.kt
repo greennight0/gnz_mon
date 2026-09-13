@@ -36,6 +36,14 @@ sealed interface ScanFailureReason {
     data object Network : ScanFailureReason
     data object EmptyResponse : ScanFailureReason
     data object InvalidResponse : ScanFailureReason
+    data object MalformedJson : ScanFailureReason
+    data object TruncatedResponse : ScanFailureReason
+    data object SafetyBlocked : ScanFailureReason
+    data object NoCandidates : ScanFailureReason
+    data object MissingContent : ScanFailureReason
+    data class MissingRequiredField(val field: String) : ScanFailureReason
+    data class UnknownCategory(val category: String) : ScanFailureReason
+    data class InconsistentTaxonomy(val category: String, val kingdom: String) : ScanFailureReason
     data object Unexpected : ScanFailureReason
     data class LowConfidence(val confidence: Int) : ScanFailureReason
 }

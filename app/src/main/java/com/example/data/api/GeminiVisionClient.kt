@@ -126,12 +126,7 @@ class GeminiVisionClient {
                 }
                 put("contents", contents)
 
-                val genConfig = JSONObject().apply {
-                    put("temperature", 0.2)
-                    put("topP", 0.95)
-                    put("responseMimeType", "application/json")
-                }
-                put("generationConfig", genConfig)
+                put("generationConfig", createGenerationConfig())
             }
 
             val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
@@ -152,7 +147,8 @@ class GeminiVisionClient {
         } catch (e: IOException) {
             mapTransportFailure(e)
         } catch (e: Exception) {
-            Log.e("GeminiVisionClient", "Error analyzing image: ${e.message}", e)
+            // Exceptions from HTTP/request parsing can embed the URL (and therefore the API key).
+            Log.e(TAG, "Image analysis failed: errorType=${e.javaClass.simpleName}")
             failure(ScanFailureReason.Unexpected, e)
         }
     }
@@ -170,20 +166,99 @@ class GeminiVisionClient {
             JSONObject(body)
         } catch (error: Exception) {
             logResponseError(code, error.javaClass.simpleName, throwable = error)
-            return failure(ScanFailureReason.InvalidResponse, error)
+            return failure(ScanFailureReason.MalformedJson, error)
         }
-        val rawText = rootJson.optJSONArray("candidates")?.optJSONObject(0)
-            ?.optJSONObject("content")?.optJSONArray("parts")
-            ?.optJSONObject(0)?.optString("text").orEmpty()
-        if (rawText.isBlank()) {
-            logResponseError(code, "MissingRequiredField", "candidates[0].content.parts[0].text")
-            return failure(ScanFailureReason.EmptyResponse)
+        val blockReason = rootJson.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
+        if (blockReason.isNotBlank() && blockReason != "BLOCK_REASON_UNSPECIFIED") {
+            logResponseError(code, "SafetyBlocked")
+            return failure(ScanFailureReason.SafetyBlocked)
+        }
+        val candidates = rootJson.optJSONArray("candidates")
+        if (candidates == null || candidates.length() == 0) {
+            logResponseError(code, "NoCandidates")
+            return failure(ScanFailureReason.NoCandidates)
+        }
+        val candidate = candidates.optJSONObject(0) ?: return failure(ScanFailureReason.MissingContent)
+        val safetyRatings = candidate.optJSONArray("safetyRatings")
+        if (safetyRatings != null && (0 until safetyRatings.length()).any {
+                safetyRatings.optJSONObject(it)?.optBoolean("blocked") == true
+            }) {
+            return failure(ScanFailureReason.SafetyBlocked)
+        }
+        when (candidate.optString("finishReason")) {
+            "", "STOP", "FINISH_REASON_UNSPECIFIED" -> Unit
+            "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "IMAGE_SAFETY" ->
+                return failure(ScanFailureReason.SafetyBlocked)
+            "MAX_TOKENS", "RECITATION", "MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL" ->
+                return failure(ScanFailureReason.TruncatedResponse)
+            else -> return failure(ScanFailureReason.InvalidResponse)
+        }
+        val parts = candidate.optJSONObject("content")?.optJSONArray("parts")
+        if (parts == null || parts.length() == 0) return failure(ScanFailureReason.MissingContent)
+        val rawText = buildString {
+            for (index in 0 until parts.length()) {
+                val part = parts.optJSONObject(index)
+                if (part == null || !part.has("text") || part.optString("text").isBlank()) {
+                    logResponseError(code, "MissingContent", "candidates[0].content.parts[$index].text")
+                    return failure(ScanFailureReason.MissingContent)
+                }
+                append(part.getString("text"))
+            }
         }
         return parseSpeciesJson(cleanJsonString(rawText), code)
     }
 
     internal fun mapTransportFailure(error: IOException): RecognitionResult.Failure =
         failure(if (error is SocketTimeoutException) ScanFailureReason.Timeout else ScanFailureReason.Network, error)
+
+    /** Kept separate from request construction so the wire contract can be fixture-tested. */
+    internal fun createGenerationConfig(): JSONObject = JSONObject().apply {
+        put("temperature", 0.2)
+        put("topP", 0.95)
+        put("responseMimeType", "application/json")
+        put("responseSchema", recognitionResponseSchema())
+    }
+
+    private fun recognitionResponseSchema(): JSONObject {
+        fun scalar(type: String, enum: List<String>? = null) = JSONObject().apply {
+            put("type", type)
+            enum?.let { values -> put("enum", JSONArray(values)) }
+        }
+        val stringFields = listOf(
+            "objectLabel", "commonNameEn", "commonNameVi", "scientificName", "kingdom",
+            "family", "orderName", "descriptionEn", "descriptionVi", "habitatEn", "habitatVi",
+            "distributionEn", "distributionVi", "ecologicalRoleEn", "ecologicalRoleVi",
+            "mysteriaFactEn", "mysteriaFactVi", "toxicityOrCareEn", "toxicityOrCareVi"
+        )
+        val properties = JSONObject().apply {
+            put("isLivingOrganism", scalar("boolean"))
+            put("confidenceScore", scalar("integer").apply {
+                put("minimum", 0)
+                put("maximum", 100)
+            })
+            stringFields.forEach { put(it, scalar("string")) }
+            put("category", scalar("string", SpeciesCategory.entries.map { it.name }))
+            put("conservationStatusCode", scalar("string", listOf("LC", "NT", "VU", "EN", "CR", "NE")))
+        }
+        val organismRequired = listOf(
+            "isLivingOrganism", "objectLabel", "confidenceScore", "commonNameEn", "commonNameVi",
+            "scientificName", "category", "kingdom", "family", "orderName", "descriptionEn",
+            "descriptionVi", "habitatEn", "habitatVi", "distributionEn", "distributionVi",
+            "ecologicalRoleEn", "ecologicalRoleVi", "mysteriaFactEn", "mysteriaFactVi",
+            "conservationStatusCode", "toxicityOrCareEn", "toxicityOrCareVi"
+        )
+        fun branch(required: List<String>) = JSONObject().apply {
+            put("required", JSONArray(required))
+        }
+        return JSONObject().apply {
+            put("type", "object")
+            put("properties", properties)
+            put("anyOf", JSONArray().apply {
+                put(branch(listOf("isLivingOrganism", "objectLabel", "confidenceScore")))
+                put(branch(organismRequired))
+            })
+        }
+    }
 
     private fun cleanJsonString(text: String): String {
         var clean = text.trim()
@@ -205,12 +280,31 @@ class GeminiVisionClient {
         } catch (error: Exception) {
             val missingField = (error as? MissingRequiredFieldException)?.field
             logResponseError(httpStatus, error.javaClass.simpleName, missingField, error)
-            failure(ScanFailureReason.InvalidResponse, error)
+            val reason = when (error) {
+                is MissingRequiredFieldException -> ScanFailureReason.MissingRequiredField(error.field)
+                is UnknownCategoryException -> ScanFailureReason.UnknownCategory(error.category)
+                is InconsistentTaxonomyException ->
+                    ScanFailureReason.InconsistentTaxonomy(error.category, error.kingdom)
+                is org.json.JSONException -> if (looksTruncated(jsonString)) {
+                    ScanFailureReason.TruncatedResponse
+                } else {
+                    ScanFailureReason.MalformedJson
+                }
+                else -> ScanFailureReason.InvalidResponse
+            }
+            failure(reason, error)
         }
+    }
+
+    private fun looksTruncated(text: String): Boolean {
+        val clean = cleanJsonString(text)
+        return clean.startsWith("{") && !clean.endsWith("}")
     }
 
     private fun parseRecognitionJson(json: JSONObject): RecognitionResult {
         if (!json.has("isLivingOrganism")) throw MissingRequiredFieldException("isLivingOrganism")
+        if (!json.has("objectLabel")) throw MissingRequiredFieldException("objectLabel")
+        if (!json.has("confidenceScore")) throw MissingRequiredFieldException("confidenceScore")
         val confidence = json.optInt("confidenceScore", -1)
         require(confidence in 0..100) { "Invalid confidenceScore" }
         if (!json.getBoolean("isLivingOrganism")) {
@@ -225,10 +319,11 @@ class GeminiVisionClient {
         fun required(name: String): String = json.optString(name).trim().also {
             if (it.isEmpty()) throw MissingRequiredFieldException(name)
         }
+        val categoryValue = required("category")
         val category = try {
-            SpeciesCategory.valueOf(required("category").uppercase())
+            SpeciesCategory.valueOf(categoryValue.uppercase())
         } catch (error: IllegalArgumentException) {
-            throw IllegalArgumentException("Invalid species category", error)
+            throw UnknownCategoryException(categoryValue)
         }
         val kingdom = required("kingdom")
         val expectedKingdom = when (category) {
@@ -238,15 +333,15 @@ class GeminiVisionClient {
             SpeciesCategory.AQUATIC -> "Animalia"
             SpeciesCategory.OTHER -> null
         }
-        require(expectedKingdom == null || kingdom.equals(expectedKingdom, ignoreCase = true)) {
-            "Category $category is inconsistent with kingdom $kingdom"
+        if (expectedKingdom != null && !kingdom.equals(expectedKingdom, ignoreCase = true)) {
+            throw InconsistentTaxonomyException(category.name, kingdom)
         }
 
-        val statusCode = json.optString("conservationStatusCode", "LC").uppercase()
+        val statusCode = required("conservationStatusCode").uppercase()
         val validStatus = try {
             ConservationStatus.valueOf(statusCode).code
         } catch (e: Exception) {
-            "LC"
+            throw IllegalArgumentException("Invalid conservation status", e)
         }
 
         val species = SpeciesInfo(
@@ -258,19 +353,19 @@ class GeminiVisionClient {
             kingdom = kingdom,
             family = required("family"),
             orderName = required("orderName"),
-            descriptionEn = json.optString("descriptionEn", "Natural species captured with GNZ MON scanner."),
-            descriptionVi = json.optString("descriptionVi", "Loài sinh vật tự nhiên được ghi nhận qua máy quét GNZ MON."),
-            habitatEn = json.optString("habitatEn", "Tropical and temperate natural environments."),
-            habitatVi = json.optString("habitatVi", "Môi trường tự nhiên nhiệt đới và ôn đới."),
-            distributionEn = json.optString("distributionEn", "Worldwide / Southeast Asia."),
-            distributionVi = json.optString("distributionVi", "Toàn cầu / Khu vực Đông Nam Á & Việt Nam."),
-            ecologicalRoleEn = json.optString("ecologicalRoleEn", "Contributes to ecosystem biodiversity."),
-            ecologicalRoleVi = json.optString("ecologicalRoleVi", "Đóng góp duy trì cân bằng và đa dạng sinh thái."),
-            mysteriaFactEn = json.optString("mysteriaFactEn", "Possesses unique morphological adaptations for survival in the wild."),
-            mysteriaFactVi = json.optString("mysteriaFactVi", "Sở hữu những bí ẩn tiến hóa và khả năng thích nghi tuyệt diệu."),
+            descriptionEn = required("descriptionEn"),
+            descriptionVi = required("descriptionVi"),
+            habitatEn = required("habitatEn"),
+            habitatVi = required("habitatVi"),
+            distributionEn = required("distributionEn"),
+            distributionVi = required("distributionVi"),
+            ecologicalRoleEn = required("ecologicalRoleEn"),
+            ecologicalRoleVi = required("ecologicalRoleVi"),
+            mysteriaFactEn = required("mysteriaFactEn"),
+            mysteriaFactVi = required("mysteriaFactVi"),
             conservationStatusCode = validStatus,
-            toxicityOrCareEn = json.optString("toxicityOrCareEn", "Harmless in natural habitat."),
-            toxicityOrCareVi = json.optString("toxicityOrCareVi", "Lành tính trong môi trường sống tự nhiên."),
+            toxicityOrCareEn = required("toxicityOrCareEn"),
+            toxicityOrCareVi = required("toxicityOrCareVi"),
             confidenceScore = confidence,
             identifiedAtMillis = System.currentTimeMillis()
         )
@@ -285,6 +380,12 @@ class GeminiVisionClient {
     private class MissingRequiredFieldException(val field: String) :
         IllegalArgumentException("Missing required response field: $field")
 
+    private class UnknownCategoryException(val category: String) :
+        IllegalArgumentException("Unknown species category")
+
+    private class InconsistentTaxonomyException(val category: String, val kingdom: String) :
+        IllegalArgumentException("Inconsistent taxonomy")
+
     private fun logResponseError(
         httpStatus: Int,
         jsonErrorType: String,
@@ -294,7 +395,8 @@ class GeminiVisionClient {
         // Deliberately log metadata only: never the URL/API key, response body, prompt, or image data.
         val message = "Response analysis failed: httpStatus=$httpStatus, " +
             "jsonErrorType=$jsonErrorType, missingRequiredField=${missingRequiredField ?: "none"}"
-        if (throwable == null) Log.e(TAG, message) else Log.e(TAG, message, throwable)
+        // Do not attach the throwable: JSON exception messages may quote response fragments.
+        Log.e(TAG, message)
     }
 
     private fun failure(reason: ScanFailureReason, cause: Throwable? = null) =
