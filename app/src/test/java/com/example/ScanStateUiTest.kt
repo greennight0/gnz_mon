@@ -4,10 +4,14 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.RectF
 import androidx.compose.ui.test.assertExists
+import androidx.compose.ui.test.assertDoesNotExist
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.AppLanguage
+import com.example.data.model.DetectorErrorType
+import com.example.data.model.DetectorState
 import com.example.data.model.ScanFailureReason
 import com.example.data.model.ScanState
 import com.example.ui.MainViewModel
@@ -75,6 +79,47 @@ class ScanStateUiTest {
             )
         }
         composeRule.onNodeWithTag("scan_error").assertExists()
+    }
+
+    @Test fun `detector model error has safe guidance and retry`() {
+        setDetectorState(DetectorState.Error(IllegalArgumentException("private details"), DetectorErrorType.INVALID_MODEL))
+        composeRule.onNodeWithTag("detector_status_guidance")
+            .assertTextEquals("The detector model is invalid or missing.", "Retry detector")
+        composeRule.onNodeWithTag("retry_detector_button").assertExists()
+    }
+
+    @Test fun `incompatible runtime error has safe guidance and retry`() {
+        setDetectorState(DetectorState.Error(UnsatisfiedLinkError("native stack"), DetectorErrorType.INCOMPATIBLE_RUNTIME))
+        composeRule.onNodeWithTag("detector_status_guidance")
+            .assertTextEquals("The detector runtime is incompatible with this device/ABI.", "Retry detector")
+        composeRule.onNodeWithTag("retry_detector_button").assertExists()
+    }
+
+    @Test fun `unknown detector error has safe guidance and retry`() {
+        setDetectorState(DetectorState.Error(RuntimeException("secret"), DetectorErrorType.UNKNOWN))
+        composeRule.onNodeWithTag("detector_status_guidance")
+            .assertTextEquals("The detector encountered an unknown error.", "Retry detector")
+        composeRule.onNodeWithTag("retry_detector_button").assertExists()
+    }
+
+    @Test fun `temporary frame error does not offer detector retry`() {
+        setDetectorState(DetectorState.FrameError(IllegalArgumentException("frame bytes")))
+        composeRule.onNodeWithTag("detector_status_guidance")
+            .assertTextEquals("This frame could not be processed. Detection is still running.")
+        composeRule.onNodeWithTag("retry_detector_button").assertDoesNotExist()
+    }
+
+    private fun setDetectorState(state: DetectorState) {
+        composeRule.setContent {
+            ScannerOverlay(
+                detectedSpecies = null,
+                isAnalyzing = false,
+                detectorState = state,
+                language = AppLanguage.ENGLISH,
+                onSpeciesClick = {},
+                onCaptureClick = {}
+            )
+        }
     }
 
     @Test fun `unexpected analysis exception stays on scanner and permits retry`() = runBlocking {

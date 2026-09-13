@@ -17,7 +17,7 @@ import java.lang.reflect.Proxy
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class ObjectDetectorAnalyzerStressTest {
-    @Test fun `failed frame emits only error and cannot overwrite error state`() {
+    @Test fun `failed frame emits only error and remains non blocking`() {
         val failure = IllegalArgumentException("bad frame")
         val callbacks = mutableListOf<String>()
         val viewModel = MainViewModel(ApplicationProvider.getApplicationContext())
@@ -34,7 +34,7 @@ class ObjectDetectorAnalyzerStressTest {
         analyzer.analyze(imageProxy(0) {})
 
         assertEquals(listOf("error"), callbacks)
-        assertTrue(viewModel.detectorState.value is DetectorState.Error)
+        assertTrue(viewModel.detectorState.value is DetectorState.FrameError)
     }
 
     @Test fun `permanent detector failure pauses subsequent inference`() {

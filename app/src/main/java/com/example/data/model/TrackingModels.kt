@@ -7,7 +7,25 @@ sealed interface DetectorState {
     data object NotReady : DetectorState
     data object NoObjects : DetectorState
     data object Tracking : DetectorState
-    data class Error(val cause: Throwable? = null) : DetectorState
+    /** A dropped/invalid frame. Detection remains active and no retry action is required. */
+    data class FrameError(
+        val cause: Throwable? = null,
+        val type: DetectorErrorType = DetectorErrorType.FRAME_TEMPORARY
+    ) : DetectorState
+
+    /** A blocking failure for which the detector must be recreated. */
+    data class Error(
+        val cause: Throwable? = null,
+        val type: DetectorErrorType = DetectorErrorType.UNKNOWN
+    ) : DetectorState
+}
+
+/** Stable, UI-safe detector failure classification; exception messages are telemetry-only. */
+enum class DetectorErrorType {
+    INVALID_MODEL,
+    INCOMPATIBLE_RUNTIME,
+    FRAME_TEMPORARY,
+    UNKNOWN
 }
 
 /**

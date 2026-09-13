@@ -6,6 +6,7 @@ import android.graphics.Matrix
 import android.graphics.RectF
 import android.util.Size
 import android.util.Log
+import android.os.Build
 import android.view.ViewGroup
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -42,8 +43,25 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.BuildConfig
 
 enum class TargetImageSource { PREVIEW_VIEW, IMAGE_CAPTURE }
+
+/** Records detector diagnostics only. Frame pixels and image metadata are deliberately excluded. */
+internal fun logDetectorFailure(error: Throwable, temporary: Boolean) {
+    val root = generateSequence(error) { it.cause }.last()
+    val message = buildString {
+        append("detector_failure temporary=").append(temporary)
+        append(" exception=").append(error.javaClass.name)
+        append(" root_cause=").append(root.javaClass.name)
+        append(" model_asset=").append(BuildConfig.DETECTOR_MODEL_ASSET)
+        append(" manufacturer=").append(Build.MANUFACTURER)
+        append(" model=").append(Build.MODEL)
+        append(" sdk=").append(Build.VERSION.SDK_INT)
+        append(" abis=").append(Build.SUPPORTED_ABIS.joinToString(","))
+    }
+    if (temporary) Log.w("DetectorTelemetry", message, error) else Log.e("DetectorTelemetry", message, error)
+}
 
 /** The selection copied on the UI thread when Scan is pressed. */
 class TargetCaptureRequest(val trackId: Int, previewRect: RectF) {
@@ -304,6 +322,7 @@ fun CameraPreviewView(
         // CameraX's main executor. LaunchedEffect resumes on main before binding/state callbacks.
         val engine = withContext(Dispatchers.Default) {
             createDetectorEngine(context) { error ->
+                logDetectorFailure(error, temporary = false)
                 ContextCompat.getMainExecutor(context).execute { onDetectorError(error) }
             }
         }
@@ -343,6 +362,7 @@ fun CameraPreviewView(
                             }
                         },
                         onDetectionError = { error ->
+                            logDetectorFailure(error, temporary = error !is PermanentDetectorException)
                             ContextCompat.getMainExecutor(context).execute { onDetectorError(error) }
                         }
                     )
