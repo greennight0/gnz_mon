@@ -151,23 +151,37 @@ androidComponents {
       dependsOn(validateModel)
     }
 
-    val verifyArchive = tasks.register<VerifyDetectorModelArchiveTask>(
-      "verify${capitalizedVariant}DetectorModelArchive",
+    val verifyApkArchive = tasks.register<VerifyDetectorModelArchiveTask>(
+      "verify${capitalizedVariant}DetectorModelApk",
     ) {
       group = "verification"
-      description = "Checks that ${variant.name} APK/AAB archives contain exactly $detectorModelAsset."
+      description = "Checks that ${variant.name} APK archives contain exactly $detectorModelAsset."
       variantName.set(variant.name)
+      archiveKind.set("APK")
       expectedAssetPath.set("assets/$detectorModelAsset")
       minimumByteCount.set(minimumDetectorModelBytes)
-      archives.from(
-        variant.artifacts.get(SingleArtifact.APK),
-        variant.artifacts.get(SingleArtifact.BUNDLE),
-      )
+      val apkDirectory = variant.artifacts.get(SingleArtifact.APK)
+      archives.from(apkDirectory.map { directory ->
+        directory.asFileTree.matching { include("*.apk") }
+      })
     }
-    tasks.matching {
-      it.name == "assemble$capitalizedVariant" || it.name == "bundle$capitalizedVariant"
-    }.configureEach {
-      finalizedBy(verifyArchive)
+
+    val verifyBundleArchive = tasks.register<VerifyDetectorModelArchiveTask>(
+      "verify${capitalizedVariant}DetectorModelBundle",
+    ) {
+      group = "verification"
+      description = "Checks that the ${variant.name} app bundle contains exactly $detectorModelAsset."
+      variantName.set(variant.name)
+      archiveKind.set("AAB")
+      expectedAssetPath.set("assets/$detectorModelAsset")
+      minimumByteCount.set(minimumDetectorModelBytes)
+      archives.from(variant.artifacts.get(SingleArtifact.BUNDLE))
+    }
+    tasks.matching { it.name == "assemble$capitalizedVariant" }.configureEach {
+      finalizedBy(verifyApkArchive)
+    }
+    tasks.matching { it.name == "bundle$capitalizedVariant" }.configureEach {
+      finalizedBy(verifyBundleArchive)
     }
   }
 }
