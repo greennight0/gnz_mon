@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.RectF
+import android.util.Size
 import android.util.Log
 import android.view.ViewGroup
 import androidx.camera.core.Camera
@@ -36,6 +37,32 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.model.TrackedBoundingBox
 import java.util.concurrent.Executors
+
+enum class TargetImageSource { PREVIEW_VIEW, IMAGE_CAPTURE }
+
+/** The selection copied on the UI thread when Scan is pressed. */
+class TargetCaptureRequest(val trackId: Int, previewRect: RectF) {
+    init { require(!previewRect.isEmpty) }
+    val previewRect: RectF = RectF(previewRect)
+}
+
+data class TargetSnapshot(
+    val trackId: Int,
+    val bitmap: Bitmap,
+    val sourceRect: RectF,
+    val sourceImageSize: Size,
+    val source: TargetImageSource
+)
+
+internal fun mapAndClampTargetRect(rect: RectF, transform: Matrix, width: Int, height: Int): RectF {
+    val mapped = RectF(rect)
+    transform.mapRect(mapped)
+    require(width > 0 && height > 0)
+    val left = mapped.left.coerceIn(0f, (width - 1).toFloat())
+    val top = mapped.top.coerceIn(0f, (height - 1).toFloat())
+    return RectF(left, top, mapped.right.coerceIn(left + 1f, width.toFloat()),
+        mapped.bottom.coerceIn(top + 1f, height.toFloat()))
+}
 
 class CameraController(
     private val context: Context,
@@ -91,6 +118,68 @@ class CameraController(
             }
         )
     }
+
+    /**
+     * Captures exactly [request], never consulting the live tracker after this call. Preview
+     * pixels use PreviewView coordinates. An ImageCapture buffer is mapped with CameraX's
+     * OutputTransform pair, which includes crop, rotation, FILL_CENTER and front-camera mirror.
+     */
+    fun captureTarget(
+        request: TargetCaptureRequest,
+        onCaptured: (TargetSnapshot) -> Unit
+    ) {
+        val targetTrackId = request.trackId
+        val targetRect = RectF(request.previewRect)
+        val view = previewView ?: return onError(IllegalStateException("Camera preview is not ready"))
+        val previewRect = mapAndClampTargetRect(targetRect, Matrix(), view.width, view.height)
+        view.bitmap?.let { bitmap ->
+            val rect = mapAndClampTargetRect(previewRect, Matrix(), bitmap.width, bitmap.height)
+            onCaptured(snapshot(targetTrackId, bitmap, rect, TargetImageSource.PREVIEW_VIEW))
+            return
+        }
+
+        // Copy the preview transform now: a later tracking/layout update cannot alter the request.
+        val previewTransform = view.outputTransform
+            ?: return onError(IllegalStateException("Preview transformation is not ready"))
+        val capture = imageCapture
+            ?: return onError(IllegalStateException("Camera capture is not ready"))
+        if (cameraExecutor.isShutdown) cameraExecutor = Executors.newSingleThreadExecutor()
+        capture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
+            override fun onCaptureSuccess(image: ImageProxy) {
+                try {
+                    val imageTransform = ImageProxyTransformFactory().apply {
+                        isUsingCropRect = true
+                        isUsingRotationDegrees = true
+                    }.getOutputTransform(image)
+                    val sourceRect = RectF(previewRect)
+                    CoordinateTransform(previewTransform, imageTransform).mapRect(sourceRect)
+                    val bitmap = image.toBitmap()
+                    val rect = mapAndClampTargetRect(sourceRect, Matrix(), bitmap.width, bitmap.height)
+                    onCaptured(snapshot(targetTrackId, bitmap, rect, TargetImageSource.IMAGE_CAPTURE))
+                } catch (e: Exception) {
+                    Log.e("CameraController", "Failed to capture selected target", e)
+                    onError(e)
+                } finally {
+                    image.close()
+                }
+            }
+
+            override fun onError(exception: ImageCaptureException) = this@CameraController.onError(exception)
+        })
+    }
+
+    private fun snapshot(trackId: Int, source: Bitmap, rect: RectF, kind: TargetImageSource): TargetSnapshot {
+        val left = rect.left.toInt().coerceIn(0, source.width - 1)
+        val top = rect.top.toInt().coerceIn(0, source.height - 1)
+        val right = rect.right.toInt().coerceIn(left + 1, source.width)
+        val bottom = rect.bottom.toInt().coerceIn(top + 1, source.height)
+        val exactRect = RectF(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat())
+        return TargetSnapshot(
+            trackId, Bitmap.createBitmap(source, left, top, right - left, bottom - top),
+            exactRect, Size(source.width, source.height), kind
+        )
+    }
+
 
     fun toggleTorch(enable: Boolean) {
         camera?.cameraControl?.enableTorch(enable)
