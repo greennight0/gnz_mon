@@ -18,6 +18,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.down
+import androidx.compose.ui.test.up
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AppLanguage
 import com.example.data.model.SpeciesCategory
@@ -26,6 +28,7 @@ import com.example.data.model.TrackedBoundingBox
 import com.example.ui.MainViewModel
 import com.example.ui.components.ScannerOverlay
 import com.example.ui.components.hitTestTrackedBoxes
+import com.example.ui.components.displayedTrackedRect
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -143,7 +146,7 @@ class TrackSelectorTest {
     }
 
     @Test
-    fun tappingOutsideAllBoundingBoxesClearsSelection() {
+    fun tappingOutsideAllBoundingBoxesKeepsSelection() {
         val selections = mutableListOf<Int?>()
         setOverlayContent { selections += it }
 
@@ -155,9 +158,9 @@ class TrackSelectorTest {
         composeRule.onNodeWithTag("bounding_box_canvas")
             .performTouchInput { click(Offset(20f, 400f)) }
 
-        assertEquals(listOf(42, null), selections)
-        composeRule.onNodeWithTag("bounding_box_target_42").assertIsNotSelected()
-        composeRule.onNodeWithTag("capture_button").assertDoesNotExist()
+        assertEquals(listOf(42), selections)
+        composeRule.onNodeWithTag("bounding_box_target_42").assertIsSelected()
+        composeRule.onNodeWithTag("capture_button").assertExists()
     }
 
     @Test
@@ -225,6 +228,68 @@ class TrackSelectorTest {
             2,
             hitTestTrackedBoxes(tap, listOf(large, small), null, 400f, 800f, 20f)?.id
         )
+    }
+
+    @Test
+    fun detectorBoxSmallerThanDrawnMinimumHitsOnAllDisplayedEdges() {
+        val tiny = trackedBox.copy(normalizedRect = RectF(0.25f, 0.25f, 0.26f, 0.255f))
+        val displayed = displayedTrackedRect(tiny, 400f, 800f, 60f)
+        val edgeTaps = listOf(
+            Offset(displayed.left, displayed.center.y),
+            Offset(displayed.right, displayed.center.y),
+            Offset(displayed.center.x, displayed.top),
+            Offset(displayed.center.x, displayed.bottom)
+        )
+
+        edgeTaps.forEach { tap ->
+            assertEquals(
+                42,
+                hitTestTrackedBoxes(tap, listOf(tiny), null, 400f, 800f, 0f, 60f, 48f, 0f)?.id
+            )
+        }
+    }
+
+    @Test
+    fun velocityPaddingIsBoundedAndHelpsFastMovingBox() {
+        val fast = trackedBox.copy(
+            normalizedRect = RectF(0.2f, 0.2f, 0.3f, 0.3f),
+            velocityX = 1f,
+            velocityY = -1f
+        )
+        assertEquals(
+            42,
+            hitTestTrackedBoxes(Offset(55f, 160f), listOf(fast), null, 400f, 800f, 0f, 0f, 48f, 24f)?.id
+        )
+        assertEquals(
+            null,
+            hitTestTrackedBoxes(Offset(51f, 160f), listOf(fast), null, 400f, 800f, 0f, 0f, 48f, 24f)?.id
+        )
+    }
+
+    @Test
+    fun gestureUsesPointerDownGeometryWhenListAndSameIdRectChange() {
+        val selections = mutableListOf<Int?>()
+        var boxes by mutableStateOf(listOf(trackedBox))
+        composeRule.setContent {
+            ScannerOverlay(
+                modifier = Modifier.size(400.dp, 800.dp),
+                detectedSpecies = null,
+                isAnalyzing = false,
+                language = AppLanguage.VIETNAMESE,
+                trackedObjects = boxes,
+                onSelectTrack = { selections += it },
+                onSpeciesClick = {},
+                onCaptureClick = {}
+            )
+        }
+
+        val originalCenter = Offset(160f, 320f)
+        composeRule.onNodeWithTag("bounding_box_canvas").performTouchInput { down(originalCenter) }
+        boxes = listOf(trackedBox.copy(normalizedRect = RectF(0.7f, 0.7f, 0.9f, 0.9f)))
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.onNodeWithTag("bounding_box_canvas").performTouchInput { up() }
+
+        assertEquals(listOf(42), selections)
     }
 
     @Test

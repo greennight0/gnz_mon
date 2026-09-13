@@ -15,7 +15,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,12 +51,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -86,9 +90,31 @@ import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.LaserCyan
 import com.example.ui.theme.MysticBlue50
 import com.example.ui.theme.NeonEmerald
+import kotlin.math.abs
 import kotlin.math.min
 
 private const val TOUCH_PADDING_DP = 20f
+private const val MIN_DRAWN_BOX_DP = 60f
+private const val MIN_TOUCH_TARGET_DP = 48f
+private const val MAX_VELOCITY_PADDING_DP = 24f
+
+/** Converts detector coordinates to the exact pixel rectangle presented to the user. */
+internal fun displayedTrackedRect(
+    box: TrackedBoundingBox,
+    screenW: Float,
+    screenH: Float,
+    minimumSizePx: Float
+): Rect {
+    val detector = box.normalizedRect
+    val left = detector.left * screenW
+    val top = detector.top * screenH
+    return Rect(
+        left = left,
+        top = top,
+        right = left + ((detector.right - detector.left) * screenW).coerceAtLeast(minimumSizePx),
+        bottom = top + ((detector.bottom - detector.top) * screenH).coerceAtLeast(minimumSizePx)
+    )
+}
 
 @Composable
 private fun phaseLabel(state: ScanState, isVi: Boolean): String = stringResource(when (state) {
@@ -109,30 +135,42 @@ internal fun hitTestTrackedBoxes(
     selectedTrackId: Int?,
     screenW: Float,
     screenH: Float,
-    touchPaddingPx: Float
+    touchPaddingPx: Float,
+    minimumDisplaySizePx: Float = 0f,
+    minimumTouchTargetPx: Float = 0f,
+    maximumVelocityPaddingPx: Float = 0f
 ): TrackedBoundingBox? {
     if (screenW <= 0f || screenH <= 0f) return null
-
-    val tapX = tapPosition.x / screenW
-    val tapY = tapPosition.y / screenH
-    val padX = touchPaddingPx / screenW
-    val padY = touchPaddingPx / screenH
 
     return trackedObjects
         .asSequence()
         .filter { box ->
-            val rect = box.normalizedRect
-            tapX >= (rect.left - padX).coerceAtLeast(0f) &&
-                tapX <= (rect.right + padX).coerceAtMost(1f) &&
-                tapY >= (rect.top - padY).coerceAtLeast(0f) &&
-                tapY <= (rect.bottom + padY).coerceAtMost(1f)
+            val visual = displayedTrackedRect(box, screenW, screenH, minimumDisplaySizePx)
+            val extraWidth = (minimumTouchTargetPx - visual.width).coerceAtLeast(0f) / 2f
+            val extraHeight = (minimumTouchTargetPx - visual.height).coerceAtLeast(0f) / 2f
+            val velocityPadX = (abs(box.velocityX) * screenW * 0.15f)
+                .coerceAtMost(maximumVelocityPaddingPx)
+            val velocityPadY = (abs(box.velocityY) * screenH * 0.15f)
+                .coerceAtMost(maximumVelocityPaddingPx)
+            val horizontalPadding = touchPaddingPx + extraWidth + velocityPadX
+            val verticalPadding = touchPaddingPx + extraHeight + velocityPadY
+            Rect(
+                visual.left - horizontalPadding,
+                visual.top - verticalPadding,
+                visual.right + horizontalPadding,
+                visual.bottom + verticalPadding
+            ).contains(tapPosition)
         }
         .sortedWith(
             compareByDescending<TrackedBoundingBox> { it.id == selectedTrackId }
-                .thenBy { it.normalizedRect.width() * it.normalizedRect.height() }
+                .thenBy {
+                    val rect = displayedTrackedRect(it, screenW, screenH, minimumDisplaySizePx)
+                    rect.width * rect.height
+                }
                 .thenBy { box ->
-                    val dx = box.normalizedRect.centerX() - tapX
-                    val dy = box.normalizedRect.centerY() - tapY
+                    val rect = displayedTrackedRect(box, screenW, screenH, minimumDisplaySizePx)
+                    val dx = rect.center.x - tapPosition.x
+                    val dy = rect.center.y - tapPosition.y
                     dx * dx + dy * dy
                 }
         )
@@ -144,13 +182,11 @@ internal fun isTapInsideTrackedBox(
     tapPosition: Offset,
     box: TrackedBoundingBox,
     screenW: Float,
-    screenH: Float
+    screenH: Float,
+    minimumDisplaySizePx: Float = 0f
 ): Boolean {
     if (screenW <= 0f || screenH <= 0f) return false
-    val tapX = tapPosition.x / screenW
-    val tapY = tapPosition.y / screenH
-    return tapX in box.normalizedRect.left..box.normalizedRect.right &&
-        tapY in box.normalizedRect.top..box.normalizedRect.bottom
+    return displayedTrackedRect(box, screenW, screenH, minimumDisplaySizePx).contains(tapPosition)
 }
 
 /**
@@ -189,6 +225,9 @@ fun ScannerOverlay(
             if (box.id == snapshot.trackId) box.copy(normalizedRect = android.graphics.RectF(snapshot.snapshotRect)) else box
         }
     } else trackedObjects
+    val currentTrackedObjects by rememberUpdatedState(displayedTrackedObjects)
+    val currentSelectedTrackId by rememberUpdatedState(selectedTrackId)
+    val currentOnSelectTrack by rememberUpdatedState(onSelectTrack)
     // Pulse transition for tracking breathing animation
     val infiniteTransition = rememberInfiniteTransition(label = "tracking_pulse")
     val pulseGlow by infiniteTransition.animateFloat(
@@ -234,6 +273,9 @@ fun ScannerOverlay(
         val screenW = constraints.maxWidth.toFloat()
         val screenH = constraints.maxHeight.toFloat()
         val touchPaddingPx = with(density) { TOUCH_PADDING_DP.dp.toPx() }
+        val minimumDisplaySizePx = with(density) { MIN_DRAWN_BOX_DP.dp.toPx() }
+        val minimumTouchTargetPx = with(density) { MIN_TOUCH_TARGET_DP.dp.toPx() }
+        val maximumVelocityPaddingPx = with(density) { MAX_VELOCITY_PADDING_DP.dp.toPx() }
 
         // Tính toán kích thước Bounding Box mặc định khi chưa có vật thể nào trong danh sách
         val defaultBoxW = with(density) { min(290.dp.toPx(), screenW - 48.dp.toPx()) }
@@ -263,28 +305,43 @@ fun ScannerOverlay(
             modifier = Modifier
                 .fillMaxSize()
                 .testTag("bounding_box_canvas")
-                .pointerInput(displayedTrackedObjects, selectedTrackId, screenW, screenH, touchPaddingPx) {
-                    detectTapGestures { tapPosition ->
-                        val hitBox = hitTestTrackedBoxes(
+                .pointerInput(screenW, screenH, density) {
+                    awaitEachGesture {
+                        awaitFirstDown()
+                        // Geometry is intentionally frozen for this gesture. Detector updates must
+                        // not cancel it or move the target out from under the user's finger.
+                        val boxesAtDown = currentTrackedObjects
+                        val up = waitForUpOrCancellation() ?: return@awaitEachGesture
+                        val tapPosition = up.position
+                        val selectionAtUp = currentSelectedTrackId
+                        val snapshotHit = hitTestTrackedBoxes(
                             tapPosition = tapPosition,
-                            trackedObjects = displayedTrackedObjects,
-                            selectedTrackId = selectedTrackId,
+                            trackedObjects = boxesAtDown,
+                            selectedTrackId = selectionAtUp,
                             screenW = screenW,
                             screenH = screenH,
-                            touchPaddingPx = touchPaddingPx
+                            touchPaddingPx = touchPaddingPx,
+                            minimumDisplaySizePx = minimumDisplaySizePx,
+                            minimumTouchTargetPx = minimumTouchTargetPx,
+                            maximumVelocityPaddingPx = maximumVelocityPaddingPx
                         )
+                        // Read the newest list on completion while retaining the down-time shape.
+                        // If the same track still exists, its latest metadata is used.
+                        val hitBox = snapshotHit?.let { hit ->
+                            currentTrackedObjects.firstOrNull { it.id == hit.id } ?: hit
+                        }
 
                         when {
-                            hitBox == null && selectedTrackId != null -> onSelectTrack(null)
-                            hitBox?.id != selectedTrackId -> onSelectTrack(hitBox?.id)
+                            hitBox?.id != null && hitBox.id != selectionAtUp -> currentOnSelectTrack(hitBox.id)
                             // A second deliberate tap inside the visual box deselects it. A near
                             // miss that only hits its padding keeps the current target locked.
-                            hitBox != null && isTapInsideTrackedBox(
+                            snapshotHit != null && isTapInsideTrackedBox(
                                 tapPosition,
-                                hitBox,
+                                snapshotHit,
                                 screenW,
-                                screenH
-                            ) -> onSelectTrack(null)
+                                screenH,
+                                minimumDisplaySizePx
+                            ) -> currentOnSelectTrack(null)
                         }
                     }
                 }
@@ -300,12 +357,13 @@ fun ScannerOverlay(
                     }
                 )
                 sortedForCanvas.forEach { box ->
-                    val bLeft = box.normalizedRect.left * screenW
-                    val bTop = box.normalizedRect.top * screenH
-                    val bRight = box.normalizedRect.right * screenW
-                    val bBottom = box.normalizedRect.bottom * screenH
-                    val bWidth = (bRight - bLeft).coerceAtLeast(60.dp.toPx())
-                    val bHeight = (bBottom - bTop).coerceAtLeast(60.dp.toPx())
+                    val displayedRect = displayedTrackedRect(box, screenW, screenH, minimumDisplaySizePx)
+                    val bLeft = displayedRect.left
+                    val bTop = displayedRect.top
+                    val bRight = displayedRect.right
+                    val bBottom = displayedRect.bottom
+                    val bWidth = displayedRect.width
+                    val bHeight = displayedRect.height
 
                     val isSelected = (selectedTrackId != null && box.id == selectedTrackId)
                     val hasSpecies = box.identifiedSpecies != null
