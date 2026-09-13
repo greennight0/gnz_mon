@@ -112,6 +112,7 @@ fun MysteriesOfNatureApp(
     val trackedObjects by viewModel.trackedObjects.collectAsState()
     val selectedTrackId by viewModel.selectedTrackId.collectAsState()
     val recognitionError by viewModel.recognitionError.collectAsState()
+    val notOrganism by viewModel.notOrganism.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     var cameraController: CameraController? by remember { mutableStateOf(null) }
@@ -191,6 +192,7 @@ fun MysteriesOfNatureApp(
                 // High-Tech Scanner HUD Overlay (Khung nhận diện & Khung theo dõi đối tượng / Bounding Box & Object Tracking Box)
                 ScannerOverlay(
                     detectedSpecies = detectedSpecies,
+                    notOrganism = notOrganism,
                     isAnalyzing = isAnalyzing,
                     language = language,
                     trackedObjects = trackedObjects,

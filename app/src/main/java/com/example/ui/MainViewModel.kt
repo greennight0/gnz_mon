@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.model.AppLanguage
 import com.example.data.model.AppThemeMode
 import com.example.data.model.SocialLink
+import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
 import com.example.data.repository.SpeciesRepository
@@ -52,6 +53,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _recognitionError = MutableStateFlow<Throwable?>(null)
     val recognitionError: StateFlow<Throwable?> = _recognitionError.asStateFlow()
 
+    private val _notOrganism = MutableStateFlow<RecognitionResult.NotOrganism?>(null)
+    val notOrganism: StateFlow<RecognitionResult.NotOrganism?> = _notOrganism.asStateFlow()
+
     private val _isTorchEnabled = MutableStateFlow(false)
     val isTorchEnabled: StateFlow<Boolean> = _isTorchEnabled.asStateFlow()
 
@@ -81,6 +85,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // Khởi tạo trạng thái ban đầu: chưa có loài nào được quét cho tới khi người dùng kích hoạt
         _detectedSpecies.value = null
+        _notOrganism.value = null
     }
 
     private fun getDefaultCandidateBoxes(): List<TrackedBoundingBox> {
@@ -147,6 +152,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * hoặc sẵn sàng quét mới nếu box đó chưa từng được quét.
      */
     fun selectTrack(trackId: Int?) {
+        _notOrganism.value = null
         val validTrackId = trackId?.takeIf { id -> _trackedObjects.value.any { it.id == id } }
         _selectedTrackId.value = validTrackId
         _trackedObjects.value = _trackedObjects.value.map { box ->
@@ -186,6 +192,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * một Bounding Box mục tiêu mới ngay tại tọa độ đó và chọn nó để quét!
      */
     fun createOrMoveTargetBox(normCenterX: Float, normCenterY: Float) {
+        _notOrganism.value = null
         val halfW = 0.20f
         val halfH = 0.16f
         val clampedL = (normCenterX - halfW).coerceIn(0.04f, 0.96f - halfW * 2)
@@ -220,6 +227,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _boxSpeciesMap.value = map
         }
         _detectedSpecies.value = null
+        _notOrganism.value = null
     }
 
     fun reportRecognitionError(error: Throwable = IllegalStateException("Image recognition failed")) {
@@ -241,6 +249,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isAnalyzing.value = true
             _recognitionError.value = null
+            _notOrganism.value = null
             _detectedSpecies.value = null // Xóa kết quả cũ ngay lập tức để hiển thị HUD quét laser
             try {
                 // Tối ưu hóa: Nếu có Bounding Box đang được chọn/theo dõi, crop chính xác vùng mục tiêu
@@ -254,18 +263,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     bitmap
                 }
 
-                val identified = repository.identifyImage(imageToAnalyze, _customApiKey.value.takeIf { it.isNotBlank() })
-                _detectedSpecies.value = identified
-
-                // Lưu kết quả cho Bounding Box mục tiêu này
-                if (targetBox != null) {
-                    val newMap = _boxSpeciesMap.value.toMutableMap()
-                    newMap[targetBox.id] = identified
-                    _boxSpeciesMap.value = newMap
-
-                    _trackedObjects.value = _trackedObjects.value.map { box ->
-                        if (box.id == targetBox.id) box.copy(identifiedSpecies = identified) else box
+                when (val result = repository.identifyImage(imageToAnalyze, _customApiKey.value.takeIf { it.isNotBlank() })) {
+                    is RecognitionResult.Organism -> {
+                        _detectedSpecies.value = result.species
+                        if (targetBox != null) {
+                            _boxSpeciesMap.value = _boxSpeciesMap.value + (targetBox.id to result.species)
+                            _trackedObjects.value = _trackedObjects.value.map { box ->
+                                if (box.id == targetBox.id) box.copy(identifiedSpecies = result.species) else box
+                            }
+                        }
                     }
+                    is RecognitionResult.NotOrganism -> {
+                        _notOrganism.value = result
+                        clearSpeciesForTarget(targetBox?.id)
+                    }
+                    is RecognitionResult.Failure -> reportRecognitionError(result.error)
                 }
             } catch (e: Exception) {
                 _detectedSpecies.value = null
@@ -274,6 +286,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _isAnalyzing.value = false
             }
         }
+    }
+
+    private fun clearSpeciesForTarget(trackId: Int?) {
+        if (trackId == null) return
+        _boxSpeciesMap.value = _boxSpeciesMap.value - trackId
+        _trackedObjects.value = _trackedObjects.value.map { box ->
+            if (box.id == trackId) box.copy(identifiedSpecies = null) else box
+        }
+        _detectedSpecies.value = null
     }
 
     private fun cropBitmapToNormalizedRect(bitmap: Bitmap, rect: RectF): Bitmap {

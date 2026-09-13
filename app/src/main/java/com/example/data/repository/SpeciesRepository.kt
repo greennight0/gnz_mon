@@ -6,6 +6,7 @@ import com.example.data.api.GeminiVisionClient
 import com.example.data.local.AppDatabase
 import com.example.data.local.SpeciesDao
 import com.example.data.model.SocialLink
+import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesInfo
 import kotlinx.coroutines.flow.Flow
 
@@ -35,18 +36,12 @@ class SpeciesRepository(context: Context) {
     suspend fun identifyImage(
         bitmap: Bitmap,
         customApiKey: String? = null
-    ): SpeciesInfo {
+    ): RecognitionResult {
         val result = geminiVisionClient.identifyFloraOrFauna(bitmap, customApiKey)
-        return if (result.isSuccess) {
-            val identified = result.getOrThrow()
-            saveSpeciesToJournal(identified)
-            identified
-        } else {
-            // Fallback to rich offline knowledge base with random or matched sample
-            val offlineSpecies = NatureKnowledgeBase.getRandomSpecies()
-            saveSpeciesToJournal(offlineSpecies)
-            offlineSpecies
+        if (result is RecognitionResult.Organism) {
+            saveSpeciesToJournal(result.species)
         }
+        return result
     }
 
     fun getOfflineDemoSpecies(): SpeciesInfo {

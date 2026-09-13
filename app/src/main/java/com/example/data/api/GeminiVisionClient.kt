@@ -5,6 +5,7 @@ import android.util.Base64
 import android.util.Log
 import com.example.BuildConfig
 import com.example.data.model.ConservationStatus
+import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesCategory
 import com.example.data.model.SpeciesInfo
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +33,7 @@ class GeminiVisionClient {
     suspend fun identifyFloraOrFauna(
         bitmap: Bitmap,
         customApiKey: String? = null
-    ): Result<SpeciesInfo> = withContext(Dispatchers.IO) {
+    ): RecognitionResult = withContext(Dispatchers.IO) {
         try {
             val apiKey = if (!customApiKey.isNullOrBlank()) {
                 customApiKey
@@ -45,8 +46,8 @@ class GeminiVisionClient {
             }
 
             if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
-                return@withContext Result.failure(
-                    IllegalStateException("Gemini API Key is not configured. Using offline nature database.")
+                return@withContext RecognitionResult.Failure(
+                    IllegalStateException("Gemini API Key is not configured.")
                 )
             }
 
@@ -56,9 +57,17 @@ class GeminiVisionClient {
 
             val prompt = """
                 You are GNZ MON (Mysteria of Natural) expert botanist and zoologist AI.
-                Analyze the plant, animal, bird, insect, fungi, or organism in this image.
-                Provide identification in strictly valid JSON format with the following fields:
+                First decide whether the main subject is a real, living or once-living natural organism.
+                Electronics, furniture, toys, empty scenes, inanimate objects, photographs, screens,
+                drawings, statues, models, replicas and other simulations MUST NOT be inferred as species.
+                Use a minimum confidence threshold of 70. If uncertain or below 70, set
+                isLivingOrganism=false and describe the visible object/scene instead of inventing taxonomy.
+
+                Return exactly one JSON object matching this fixed schema. No extra keys are allowed:
                 {
+                  "isLivingOrganism": true or false,
+                  "objectLabel": "visible object/scene label; required when false, empty when true",
+                  "confidenceScore": integer from 0 to 100,
                   "commonNameEn": "Common name in English",
                   "commonNameVi": "Tên gọi phổ biến trong tiếng Việt",
                   "scientificName": "Binomial Latin name",
@@ -78,9 +87,11 @@ class GeminiVisionClient {
                   "mysteriaFactVi": "Điều kỳ bí, sự thích nghi đặc biệt hoặc sự thật thú vị bằng tiếng Việt",
                   "conservationStatusCode": "LC or NT or VU or EN or CR or NE",
                   "toxicityOrCareEn": "Any toxicity, care advice, or safety notice in English",
-                  "toxicityOrCareVi": "Cảnh báo độc tính, lưu ý an toàn hoặc mẹo chăm sóc bằng tiếng Việt",
-                  "confidenceScore": 95
+                  "toxicityOrCareVi": "Cảnh báo độc tính, lưu ý an toàn hoặc mẹo chăm sóc bằng tiếng Việt"
                 }
+                When isLivingOrganism=false, taxonomy and organism-description fields must be empty strings.
+                When isLivingOrganism=true, objectLabel must be empty and every taxonomy field
+                (common names, scientificName, category, kingdom, family and orderName) is required.
                 Return ONLY the raw JSON object, without markdown block backticks.
             """.trimIndent()
 
@@ -108,6 +119,7 @@ class GeminiVisionClient {
                 val genConfig = JSONObject().apply {
                     put("temperature", 0.2)
                     put("topP", 0.95)
+                    put("responseMimeType", "application/json")
                 }
                 put("generationConfig", genConfig)
             }
@@ -123,7 +135,7 @@ class GeminiVisionClient {
             val responseBody = response.body?.string()
 
             if (!response.isSuccessful || responseBody == null) {
-                return@withContext Result.failure(
+                return@withContext RecognitionResult.Failure(
                     Exception("API call failed (Code ${response.code}): ${responseBody ?: response.message}")
                 )
             }
@@ -135,12 +147,10 @@ class GeminiVisionClient {
             val rawText = parts?.optJSONObject(0)?.optString("text") ?: ""
 
             val cleanedJsonText = cleanJsonString(rawText)
-            val parsedSpecies = parseSpeciesJson(cleanedJsonText)
-
-            Result.success(parsedSpecies)
+            parseSpeciesJson(cleanedJsonText)
         } catch (e: Exception) {
             Log.e("GeminiVisionClient", "Error analyzing image: ${e.message}", e)
-            Result.failure(e)
+            RecognitionResult.Failure(e)
         }
     }
 
@@ -158,12 +168,43 @@ class GeminiVisionClient {
         return clean.trim()
     }
 
-    private fun parseSpeciesJson(jsonString: String): SpeciesInfo {
-        val json = JSONObject(jsonString)
-        val validCategory = try {
-            SpeciesCategory.valueOf(json.optString("category", "PLANT").uppercase()).name
-        } catch (e: Exception) {
-            SpeciesCategory.PLANT.name
+    internal fun parseSpeciesJson(jsonString: String): RecognitionResult {
+        return try {
+            parseRecognitionJson(JSONObject(jsonString))
+        } catch (error: Exception) {
+            RecognitionResult.Failure(error)
+        }
+    }
+
+    private fun parseRecognitionJson(json: JSONObject): RecognitionResult {
+        require(json.has("isLivingOrganism")) { "Missing isLivingOrganism" }
+        val confidence = json.optInt("confidenceScore", -1)
+        require(confidence in 0..100) { "Invalid confidenceScore" }
+        if (!json.getBoolean("isLivingOrganism")) {
+            val label = json.optString("objectLabel").trim()
+            require(label.isNotEmpty()) { "Missing objectLabel for non-organism" }
+            return RecognitionResult.NotOrganism(label, confidence)
+        }
+        require(confidence >= MINIMUM_CONFIDENCE) { "Organism confidence is below $MINIMUM_CONFIDENCE" }
+
+        fun required(name: String): String = json.optString(name).trim().also {
+            require(it.isNotEmpty()) { "Missing taxonomy field: $name" }
+        }
+        val category = try {
+            SpeciesCategory.valueOf(required("category").uppercase())
+        } catch (error: IllegalArgumentException) {
+            throw IllegalArgumentException("Invalid species category", error)
+        }
+        val kingdom = required("kingdom")
+        val expectedKingdom = when (category) {
+            SpeciesCategory.PLANT -> "Plantae"
+            SpeciesCategory.FUNGI -> "Fungi"
+            SpeciesCategory.ANIMAL, SpeciesCategory.BIRD, SpeciesCategory.INSECT,
+            SpeciesCategory.AQUATIC -> "Animalia"
+            SpeciesCategory.OTHER -> null
+        }
+        require(expectedKingdom == null || kingdom.equals(expectedKingdom, ignoreCase = true)) {
+            "Category $category is inconsistent with kingdom $kingdom"
         }
 
         val statusCode = json.optString("conservationStatusCode", "LC").uppercase()
@@ -173,15 +214,15 @@ class GeminiVisionClient {
             "LC"
         }
 
-        return SpeciesInfo(
+        val species = SpeciesInfo(
             id = UUID.randomUUID().toString(),
-            commonNameEn = json.optString("commonNameEn", "Unknown Organism"),
-            commonNameVi = json.optString("commonNameVi", "Sinh vật chưa xác định"),
-            scientificName = json.optString("scientificName", "Incertae sedis"),
-            category = validCategory,
-            kingdom = json.optString("kingdom", "Nature"),
-            family = json.optString("family", "Unknown Family"),
-            orderName = json.optString("orderName", ""),
+            commonNameEn = required("commonNameEn"),
+            commonNameVi = required("commonNameVi"),
+            scientificName = required("scientificName"),
+            category = category.name,
+            kingdom = kingdom,
+            family = required("family"),
+            orderName = required("orderName"),
             descriptionEn = json.optString("descriptionEn", "Natural species captured with GNZ MON scanner."),
             descriptionVi = json.optString("descriptionVi", "Loài sinh vật tự nhiên được ghi nhận qua máy quét GNZ MON."),
             habitatEn = json.optString("habitatEn", "Tropical and temperate natural environments."),
@@ -195,9 +236,14 @@ class GeminiVisionClient {
             conservationStatusCode = validStatus,
             toxicityOrCareEn = json.optString("toxicityOrCareEn", "Harmless in natural habitat."),
             toxicityOrCareVi = json.optString("toxicityOrCareVi", "Lành tính trong môi trường sống tự nhiên."),
-            confidenceScore = json.optInt("confidenceScore", 92),
+            confidenceScore = confidence,
             identifiedAtMillis = System.currentTimeMillis()
         )
+        return RecognitionResult.Organism(species)
+    }
+
+    private companion object {
+        const val MINIMUM_CONFIDENCE = 70
     }
 
     private fun scaleBitmapToMax(bitmap: Bitmap, maxDim: Int): Bitmap {
