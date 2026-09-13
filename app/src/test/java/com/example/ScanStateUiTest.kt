@@ -17,6 +17,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -74,5 +75,56 @@ class ScanStateUiTest {
             )
         }
         composeRule.onNodeWithTag("scan_error").assertExists()
+    }
+
+    @Test fun `unexpected analysis exception stays on scanner and permits retry`() = runBlocking {
+        val viewModel = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
+        var attempts = 0
+        viewModel.identifyImage = { _, _, _ ->
+            attempts++
+            throw IllegalStateException("surprise")
+        }
+
+        viewModel.analyzeImage(ScanRequest(7, thumbnail, rect))
+        awaitFailure(viewModel) { attempts == 1 }
+        assertEquals(ScanFailureReason.Unexpected, (viewModel.scanState.value as ScanState.Failed).reason)
+        assertTrue(viewModel.detectedSpecies.value == null)
+
+        // A failed scan releases the track reservation, so the camera screen can scan it again.
+        viewModel.analyzeImage(ScanRequest(7, thumbnail, rect))
+        awaitFailure(viewModel) { attempts == 2 }
+        assertEquals(2, attempts)
+    }
+
+    @Test fun `snackbar message failure is contained and recognition error can be cleared`() = runBlocking {
+        var handled = false
+        showRecognitionErrorSnackbar(
+            error = IllegalStateException("recognition failed"),
+            buildMessage = { throw IllegalArgumentException("broken resources") },
+            showMessage = { error("must not be called") },
+            onHandled = { handled = true }
+        )
+
+        assertTrue(handled)
+    }
+
+    @Test fun `snackbar display failure is contained and camera state remains usable`() = runBlocking {
+        var handled = false
+        showRecognitionErrorSnackbar(
+            error = IllegalStateException("recognition failed"),
+            buildMessage = { "Please scan again" },
+            showMessage = { throw IllegalStateException("Snackbar host unavailable") },
+            onHandled = { handled = true }
+        )
+
+        assertTrue(handled)
+    }
+
+    private suspend fun awaitFailure(viewModel: MainViewModel, condition: () -> Boolean = { true }) {
+        repeat(100) {
+            if (condition() && viewModel.scanState.value is ScanState.Failed && !viewModel.isAnalyzing.value) return
+            delay(10)
+        }
+        throw AssertionError("Scan did not fail in time")
     }
 }

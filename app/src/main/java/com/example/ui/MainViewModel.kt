@@ -3,6 +3,7 @@ package com.example.ui
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.RectF
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.AppLanguage
@@ -21,7 +22,11 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import org.json.JSONException
+import java.io.IOException
+import java.net.SocketTimeoutException
 import kotlin.math.sqrt
 
 data class ScanRequest(
@@ -37,6 +42,8 @@ private const val TARGET_LOCK_MAX_CENTER_DISTANCE = 0.12f
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = SpeciesRepository(application)
+
+    internal var identifyImage = repository::identifyImage
 
     // Current detected species showing on the live camera viewfinder
     private val _detectedSpecies = MutableStateFlow<SpeciesInfo?>(null)
@@ -344,7 +351,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _detectedSpecies.value = null // Xóa kết quả cũ ngay lập tức để hiển thị HUD quét laser
             try {
                 // The bitmap and ID are one immutable click-time request; do not re-read tracking.
-                val result = repository.identifyImage(
+                val result = identifyImage(
                     request.croppedBitmap,
                     _customApiKey.value.takeIf { it.isNotBlank() }
                 ) { phase ->
@@ -369,8 +376,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         clearSpeciesForTarget(targetId)
                     }
                     is RecognitionResult.Failure -> {
-                        val reason = (result.error as? ScanException)?.reason
-                            ?: ScanFailureReason.InvalidResponse
+                        val reason = classifyScanFailure(result.error)
+                        Log.e(TAG, "Image analysis returned a failure ($reason)", result.error)
                         _scanState.value = ScanState.Failed(targetId, snapshotRect, reason)
                         reportRecognitionError(result.error)
                     }
@@ -378,9 +385,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (result !is RecognitionResult.Failure) {
                     _scanState.value = ScanState.Completed(targetId, snapshotRect, result)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _detectedSpecies.value = null
-                val reason = (e as? ScanException)?.reason ?: ScanFailureReason.InvalidResponse
+                val reason = classifyScanFailure(e)
+                // Log the Throwable overload before publishing state so the complete stack is retained.
+                Log.e(TAG, "Unexpected image analysis exception ($reason)", e)
                 _scanState.value = ScanState.Failed(targetId, snapshotRect, reason)
                 reportRecognitionError(e)
             } finally {
@@ -390,6 +401,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    internal fun classifyScanFailure(error: Throwable): ScanFailureReason = when (error) {
+        is ScanException -> error.reason
+        is SocketTimeoutException -> ScanFailureReason.Timeout
+        is IOException -> ScanFailureReason.Network
+        is JSONException, is IllegalArgumentException -> ScanFailureReason.InvalidResponse
+        else -> error.cause?.takeIf { it !== error }?.let(::classifyScanFailure)
+            ?: ScanFailureReason.Unexpected
+    }
+
     private fun clearSpeciesForTarget(trackId: Int?) {
         if (trackId == null) return
         _boxSpeciesMap.value = _boxSpeciesMap.value - trackId
@@ -397,6 +417,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (box.id == trackId) box.copy(identifiedSpecies = null) else box
         }
         _detectedSpecies.value = null
+    }
+
+    private companion object {
+        const val TAG = "MainViewModel"
     }
 
     fun clearTargetSelectionRequired() {
