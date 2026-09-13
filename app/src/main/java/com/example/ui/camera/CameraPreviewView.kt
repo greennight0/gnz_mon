@@ -282,12 +282,14 @@ fun CameraPreviewView(
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                     .build()
 
-                val analyzer = ObjectDetectorAnalyzer { boxes, latency, imageProxy ->
-                    onObjectsTracked(
-                        mapBoxesToPreview(boxes, imageProxy, previewView),
-                        latency
-                    )
-                }
+                val engine = createDetectorEngine(context, onError)
+                val analyzer = ObjectDetectorAnalyzer(
+                    engine = engine,
+                    onObjectsTracked = { boxes, latency, imageProxy ->
+                        onObjectsTracked(mapBoxesToPreview(boxes, imageProxy, previewView), latency)
+                    },
+                    onDetectionError = onError
+                )
                 cameraController.currentAnalyzer?.close()
                 cameraController.currentAnalyzer = analyzer
                 imageAnalysis.setAnalyzer(cameraController.analysisExecutor, analyzer)
@@ -363,14 +365,14 @@ fun CameraPreviewView(
 }
 
 /**
- * Maps ML Kit boxes from the ImageAnalysis buffer into the exact, cropped PreviewView space.
+ * Maps detector boxes from the rotated ImageAnalysis buffer into the cropped PreviewView space.
  *
  * PreviewView uses FILL_CENTER, so scaling normalized analysis coordinates directly to the
  * Compose overlay is incorrect on most phone aspect ratios. CameraX owns the crop, rotation,
  * and mirroring matrices; using the paired output transforms keeps drawing, tapping, and the
  * camera image in the same coordinate system.
  */
-private fun mapBoxesToPreview(
+internal fun mapBoxesToPreview(
     boxes: List<TrackedBoundingBox>,
     imageProxy: ImageProxy,
     previewView: PreviewView
@@ -403,12 +405,11 @@ private fun mapBoxesToPreview(
         )
         coordinateTransform.mapRect(sourceRect)
         box.copy(
-            normalizedRect = RectF(
-                sourceRect.left / previewView.width,
-                sourceRect.top / previewView.height,
-                sourceRect.right / previewView.width,
-                sourceRect.bottom / previewView.height
-            )
+            normalizedRect = normalizePreviewRect(sourceRect, previewView.width, previewView.height)
         )
     }
 }
+
+internal fun normalizePreviewRect(rect: RectF, width: Int, height: Int) = RectF(
+    rect.left / width, rect.top / height, rect.right / width, rect.bottom / height
+)
