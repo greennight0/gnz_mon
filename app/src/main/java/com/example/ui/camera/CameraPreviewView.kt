@@ -225,6 +225,8 @@ fun CameraPreviewView(
     onControllerReady: (CameraController) -> Unit,
     onObjectsTracked: (List<TrackedBoundingBox>, Int) -> Unit = { _, _ -> },
     onDetectorError: (Exception) -> Unit = {},
+    onDetectorReady: () -> Unit = {},
+    detectorRetryKey: Int = 0,
     onImageCaptured: (Bitmap) -> Unit,
     onError: (Exception) -> Unit
 ) {
@@ -262,7 +264,7 @@ fun CameraPreviewView(
         cameraController.toggleTorch(isTorchEnabled)
     }
 
-    LaunchedEffect(isFrontCamera, previewView, lifecycleOwner) {
+    LaunchedEffect(isFrontCamera, previewView, lifecycleOwner, detectorRetryKey) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             try {
@@ -287,16 +289,20 @@ fun CameraPreviewView(
                     .build()
 
                 val engine = createDetectorEngine(context, onDetectorError)
-                val analyzer = ObjectDetectorAnalyzer(
-                    engine = engine,
-                    onObjectsTracked = { boxes, latency, imageProxy ->
-                        onObjectsTracked(mapBoxesToPreview(boxes, imageProxy, previewView), latency)
-                    },
-                    onDetectionError = onDetectorError
-                )
                 cameraController.currentAnalyzer?.close()
-                cameraController.currentAnalyzer = analyzer
-                imageAnalysis.setAnalyzer(cameraController.analysisExecutor, analyzer)
+                cameraController.currentAnalyzer = null
+                if (engine !== DisabledObjectDetectorEngine) {
+                    val analyzer = ObjectDetectorAnalyzer(
+                        engine = engine,
+                        onObjectsTracked = { boxes, latency, imageProxy ->
+                            onObjectsTracked(mapBoxesToPreview(boxes, imageProxy, previewView), latency)
+                        },
+                        onDetectionError = onDetectorError
+                    )
+                    cameraController.currentAnalyzer = analyzer
+                    imageAnalysis.setAnalyzer(cameraController.analysisExecutor, analyzer)
+                    onDetectorReady()
+                }
 
                 val cameraSelector = if (isFrontCamera) {
                     CameraSelector.DEFAULT_FRONT_CAMERA

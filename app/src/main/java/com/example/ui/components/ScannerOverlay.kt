@@ -206,6 +206,7 @@ fun ScannerOverlay(
     onSpeciesClick: (SpeciesInfo) -> Unit,
     onCaptureClick: () -> Unit,
     onRescanTarget: () -> Unit = {},
+    onRetryDetector: () -> Unit = {},
     onDismissSpecies: () -> Unit = {},
     onNextTrack: () -> Unit = {},
     isTorchEnabled: Boolean = false,
@@ -553,7 +554,7 @@ fun ScannerOverlay(
             val statusText = when (detectorState) {
                 DetectorState.NotReady -> if (isVi) "Detector đang khởi động…" else "Detector is starting…"
                 DetectorState.NoObjects -> if (isVi) "Chưa phát hiện đối tượng. Hãy hướng camera vào sinh vật." else "No object detected. Point the camera at an organism."
-                is DetectorState.Error -> if (isVi) "Detector gặp lỗi. Hãy khởi động lại camera." else "Detector error. Please restart the camera."
+                is DetectorState.Error -> if (isVi) "Detector gặp lỗi." else "Detector error."
                 DetectorState.Tracking -> if (isVi) "Đang chờ mục tiêu ổn định…" else "Waiting for a stable target…"
             }
             Surface(
@@ -565,13 +566,24 @@ fun ScannerOverlay(
                 color = Color(0xCC061426),
                 border = androidx.compose.foundation.BorderStroke(1.dp, LaserCyan.copy(alpha = 0.6f))
             ) {
-                Text(
-                    text = statusText,
+                Column(
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
-                    color = if (detectorState is DetectorState.Error) AmberGlow else LaserCyan,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(statusText, color = if (detectorState is DetectorState.Error) AmberGlow else LaserCyan,
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    if (detectorState is DetectorState.Error) {
+                        Spacer(Modifier.height(8.dp))
+                        Surface(
+                            modifier = Modifier.clickable(onClick = onRetryDetector).testTag("retry_detector_button"),
+                            shape = RoundedCornerShape(8.dp), color = AmberGlow
+                        ) {
+                            Text(if (isVi) "Thử lại detector" else "Retry detector",
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
         }
 

@@ -155,6 +155,7 @@ fun MysteriesOfNatureApp(
     }
 
     var isSnsOpen by remember { mutableStateOf(false) }
+    var detectorRetryKey by remember { mutableStateOf(0) }
 
     LaunchedEffect(recognitionError, language) {
         recognitionError?.let { error ->
@@ -229,6 +230,8 @@ fun MysteriesOfNatureApp(
                         viewModel.onObjectsTracked(boxes, latency)
                     },
                     onDetectorError = viewModel::onDetectorError,
+                    onDetectorReady = viewModel::onDetectorReady,
+                    detectorRetryKey = detectorRetryKey,
                     onImageCaptured = { bitmap ->
                         selectedTrackId?.let { viewModel.analyzeImage(ScanRequest(it, bitmap)) }
                             ?: viewModel.requireTargetSelection()
@@ -272,6 +275,7 @@ fun MysteriesOfNatureApp(
                             cameraPermissionState.launchPermissionRequest()
                         }
                     },
+                    onRetryDetector = { detectorRetryKey++ },
                     onDismissSpecies = {
                         viewModel.dismissSpeciesTag()
                     },

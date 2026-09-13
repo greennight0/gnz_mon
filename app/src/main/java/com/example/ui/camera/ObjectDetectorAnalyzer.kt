@@ -14,20 +14,24 @@ class ObjectDetectorAnalyzer(
     private val clockMillis: () -> Long = System::currentTimeMillis
 ) : ImageAnalysis.Analyzer {
     private var lastInferenceStartedAt = Long.MIN_VALUE
+    @Volatile private var detectorFailedPermanently = false
 
     override fun analyze(image: ImageProxy) {
         val started = clockMillis()
         try {
+            if (detectorFailedPermanently) return
             if (lastInferenceStartedAt != Long.MIN_VALUE &&
                 started - lastInferenceStartedAt < minimumInferenceIntervalMs
             ) return
             lastInferenceStartedAt = started
             onObjectsTracked(engine.detect(image), (clockMillis() - started).toInt(), image)
         } catch (error: Exception) {
-            // A bad frame/runtime must not kill CameraX's analysis executor.
+            // A bad frame must not kill CameraX's executor. An engine failure, however, cannot
+            // recover by processing more frames; leave it paused until CameraPreviewView replaces
+            // this analyzer after an explicit retry.
+            if (error is PermanentDetectorException) detectorFailedPermanently = true
             Log.w(TAG, "Offline object detection failed", error)
             onDetectionError(error)
-            onObjectsTracked(emptyList(), (clockMillis() - started).toInt(), image)
         } finally {
             image.close()
         }
@@ -37,3 +41,6 @@ class ObjectDetectorAnalyzer(
 
     private companion object { const val TAG = "ObjectDetectorAnalyzer" }
 }
+
+/** Signals that the detector engine, rather than one input frame, must be recreated. */
+class PermanentDetectorException(message: String, cause: Throwable? = null) : Exception(message, cause)

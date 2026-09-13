@@ -62,7 +62,13 @@ class EfficientDetLiteEngine private constructor(
             }
             // BitmapImageBuilder does not own detectorBitmap. Both the MediaPipe image and any
             // per-frame source bitmap remain valid until synchronous detect() has returned.
-            val result = BitmapImageBuilder(detectorBitmap).build().use { detector.detect(it) }
+            val result = BitmapImageBuilder(detectorBitmap).build().use { mpImage ->
+                try {
+                    detector.detect(mpImage)
+                } catch (error: Exception) {
+                    throw PermanentDetectorException("Object detector runtime failed", error)
+                }
+            }
             return tracker.update(
                 result, detectorBitmap.width.toFloat(), detectorBitmap.height.toFloat(), scoreThreshold
             )
