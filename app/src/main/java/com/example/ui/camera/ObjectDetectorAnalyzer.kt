@@ -9,17 +9,25 @@ import com.example.data.model.TrackedBoundingBox
 class ObjectDetectorAnalyzer(
     private val engine: ObjectDetectorEngine,
     private val onObjectsTracked: (List<TrackedBoundingBox>, Int, ImageProxy) -> Unit,
-    private val onDetectionError: (Exception) -> Unit = {}
+    private val onDetectionError: (Exception) -> Unit = {},
+    private val minimumInferenceIntervalMs: Long = 100L,
+    private val clockMillis: () -> Long = System::currentTimeMillis
 ) : ImageAnalysis.Analyzer {
+    private var lastInferenceStartedAt = Long.MIN_VALUE
+
     override fun analyze(image: ImageProxy) {
-        val started = System.currentTimeMillis()
+        val started = clockMillis()
         try {
-            onObjectsTracked(engine.detect(image), (System.currentTimeMillis() - started).toInt(), image)
+            if (lastInferenceStartedAt != Long.MIN_VALUE &&
+                started - lastInferenceStartedAt < minimumInferenceIntervalMs
+            ) return
+            lastInferenceStartedAt = started
+            onObjectsTracked(engine.detect(image), (clockMillis() - started).toInt(), image)
         } catch (error: Exception) {
             // A bad frame/runtime must not kill CameraX's analysis executor.
             Log.w(TAG, "Offline object detection failed", error)
             onDetectionError(error)
-            onObjectsTracked(emptyList(), (System.currentTimeMillis() - started).toInt(), image)
+            onObjectsTracked(emptyList(), (clockMillis() - started).toInt(), image)
         } finally {
             image.close()
         }

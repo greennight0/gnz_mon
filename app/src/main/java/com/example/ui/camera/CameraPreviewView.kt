@@ -280,6 +280,9 @@ fun CameraPreviewView(
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                    // EfficientDet Lite does not benefit from full capture resolution. Bounding
+                    // the analysis surface also bounds the transient YUV/RGB memory per frame.
+                    .setTargetResolution(Size(640, 480))
                     .build()
 
                 val engine = createDetectorEngine(context, onError)

@@ -2,6 +2,8 @@ package com.example.ui.camera
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.RectF
 import androidx.camera.core.ImageProxy
@@ -46,19 +48,63 @@ class EfficientDetLiteEngine private constructor(
     private val scoreThreshold: Float
 ) : ObjectDetectorEngine {
     private val tracker = GeometryTracker()
+    private var rotatedBuffer: Bitmap? = null
 
+    @Synchronized
     override fun detect(image: ImageProxy): List<TrackedBoundingBox> {
         val rotation = image.imageInfo.rotationDegrees
         val source = image.toBitmap()
-        val bitmap = if (rotation == 0) source else Bitmap.createBitmap(
-            source, 0, 0, source.width, source.height,
-            Matrix().apply { postRotate(rotation.toFloat()) }, true
-        )
-        val result = BitmapImageBuilder(bitmap).build().use { detector.detect(it) }
-        return tracker.update(result, bitmap.width.toFloat(), bitmap.height.toFloat(), scoreThreshold)
+        var detectorBitmap = source
+        try {
+            if (rotation != 0) {
+                detectorBitmap = obtainRotatedBuffer(source, rotation)
+                drawRotated(source, detectorBitmap, rotation)
+            }
+            // BitmapImageBuilder does not own detectorBitmap. Both the MediaPipe image and any
+            // per-frame source bitmap remain valid until synchronous detect() has returned.
+            val result = BitmapImageBuilder(detectorBitmap).build().use { detector.detect(it) }
+            return tracker.update(
+                result, detectorBitmap.width.toFloat(), detectorBitmap.height.toFloat(), scoreThreshold
+            )
+        } finally {
+            // ImageProxy.toBitmap() transfers a new bitmap to this method. The rotated buffer is
+            // engine-owned and reused; only the per-frame source is released here.
+            source.recycle()
+        }
     }
 
-    override fun close() = detector.close()
+    private fun obtainRotatedBuffer(source: Bitmap, rotation: Int): Bitmap {
+        val swapDimensions = rotation % 180 != 0
+        val width = if (swapDimensions) source.height else source.width
+        val height = if (swapDimensions) source.width else source.height
+        return rotatedBuffer?.takeIf { !it.isRecycled && it.width == width && it.height == height }
+            ?: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { replacement ->
+                rotatedBuffer?.recycle()
+                rotatedBuffer = replacement
+            }
+    }
+
+    private fun drawRotated(source: Bitmap, destination: Bitmap, rotation: Int) {
+        val matrix = Matrix().apply {
+            postRotate(rotation.toFloat())
+            when ((rotation % 360 + 360) % 360) {
+                90 -> postTranslate(source.height.toFloat(), 0f)
+                180 -> postTranslate(source.width.toFloat(), source.height.toFloat())
+                270 -> postTranslate(0f, source.width.toFloat())
+            }
+        }
+        Canvas(destination).apply {
+            drawColor(Color.TRANSPARENT)
+            drawBitmap(source, matrix, null)
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        rotatedBuffer?.recycle()
+        rotatedBuffer = null
+        detector.close()
+    }
 
     companion object {
         const val MODEL_ASSET = "models/efficientdet_lite0_int8.tflite"
