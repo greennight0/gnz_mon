@@ -83,6 +83,48 @@ import com.example.ui.theme.MysticBlue50
 import com.example.ui.theme.NeonEmerald
 import kotlin.math.min
 
+private const val TOUCH_PADDING_DP = 20f
+
+/**
+ * Finds the best tracked box for a tap without depending on a Canvas or Compose state.
+ * Coordinates for [tapPosition] and [touchPaddingPx] are pixels; bounding boxes remain normalized.
+ */
+internal fun hitTestTrackedBoxes(
+    tapPosition: Offset,
+    trackedObjects: List<TrackedBoundingBox>,
+    selectedTrackId: Int?,
+    screenW: Float,
+    screenH: Float,
+    touchPaddingPx: Float
+): TrackedBoundingBox? {
+    if (screenW <= 0f || screenH <= 0f) return null
+
+    val tapX = tapPosition.x / screenW
+    val tapY = tapPosition.y / screenH
+    val padX = touchPaddingPx / screenW
+    val padY = touchPaddingPx / screenH
+
+    return trackedObjects
+        .asSequence()
+        .filter { box ->
+            val rect = box.normalizedRect
+            tapX >= (rect.left - padX).coerceAtLeast(0f) &&
+                tapX <= (rect.right + padX).coerceAtMost(1f) &&
+                tapY >= (rect.top - padY).coerceAtLeast(0f) &&
+                tapY <= (rect.bottom + padY).coerceAtMost(1f)
+        }
+        .sortedWith(
+            compareByDescending<TrackedBoundingBox> { it.id == selectedTrackId }
+                .thenBy { it.normalizedRect.width() * it.normalizedRect.height() }
+                .thenBy { box ->
+                    val dx = box.normalizedRect.centerX() - tapX
+                    val dy = box.normalizedRect.centerY() - tapY
+                    dx * dx + dy * dy
+                }
+        )
+        .firstOrNull()
+}
+
 /**
  * ScannerOverlay: Giao diện khung nhận diện và theo dõi đối tượng theo thời gian thực.
  *
@@ -155,6 +197,7 @@ fun ScannerOverlay(
     ) {
         val screenW = constraints.maxWidth.toFloat()
         val screenH = constraints.maxHeight.toFloat()
+        val touchPaddingPx = with(density) { TOUCH_PADDING_DP.dp.toPx() }
 
         // Tính toán kích thước Bounding Box mặc định khi chưa có vật thể nào trong danh sách
         val defaultBoxW = with(density) { min(290.dp.toPx(), screenW - 48.dp.toPx()) }
@@ -186,24 +229,14 @@ fun ScannerOverlay(
                 .testTag("bounding_box_canvas")
                 .pointerInput(trackedObjects, selectedTrackId, screenW, screenH) {
                     detectTapGestures { tapPosition ->
-                        val normalizedTap = Offset(
-                            x = tapPosition.x / screenW,
-                            y = tapPosition.y / screenH
+                        val hitBox = hitTestTrackedBoxes(
+                            tapPosition = tapPosition,
+                            trackedObjects = trackedObjects,
+                            selectedTrackId = selectedTrackId,
+                            screenW = screenW,
+                            screenH = screenH,
+                            touchPaddingPx = touchPaddingPx
                         )
-                        val hitBox = trackedObjects
-                            .sortedWith(
-                                compareByDescending<TrackedBoundingBox> {
-                                    it.id == selectedTrackId
-                                }.thenBy {
-                                    it.normalizedRect.width() * it.normalizedRect.height()
-                                }
-                            )
-                            .firstOrNull { box ->
-                                normalizedTap.x >= box.normalizedRect.left &&
-                                    normalizedTap.x <= box.normalizedRect.right &&
-                                    normalizedTap.y >= box.normalizedRect.top &&
-                                    normalizedTap.y <= box.normalizedRect.bottom
-                            }
 
                         when {
                             hitBox != null -> onSelectTrack(
