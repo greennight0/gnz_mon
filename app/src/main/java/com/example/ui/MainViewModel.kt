@@ -18,6 +18,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlin.math.sqrt
+
+private const val TARGET_LOCK_MISSED_FRAME_TIMEOUT = 3
+private const val TARGET_LOCK_MIN_IOU = 0.20f
+private const val TARGET_LOCK_MAX_CENTER_DISTANCE = 0.12f
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -38,6 +43,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ID của Track đang được người dùng chọn/khóa (mặc định null: chưa có box nào được chọn)
     private val _selectedTrackId = MutableStateFlow<Int?>(null)
     val selectedTrackId: StateFlow<Int?> = _selectedTrackId.asStateFlow()
+    private var lockedTargetRect: RectF? = null
+    private var missedLockedTargetFrames = 0
 
     // Đo kiểm hiệu năng AI Telemetry
     private val _inferenceLatencyMs = MutableStateFlow(16)
@@ -119,11 +126,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val currentSelectedId = _selectedTrackId.value
 
         if (boxes.isNotEmpty()) {
-            val previousIndex = _trackedObjects.value.indexOfFirst { it.id == currentSelectedId }
+            val matchedTarget = when {
+                currentSelectedId == null -> null
+                else -> boxes.firstOrNull { it.id == currentSelectedId }
+                    ?: lockedTargetRect?.let { previousRect -> findLockedTarget(previousRect, boxes) }
+            }
             val validSelectedId = when {
                 currentSelectedId == null -> null
-                boxes.any { it.id == currentSelectedId } -> currentSelectedId
-                else -> boxes[previousIndex.coerceAtLeast(0) % boxes.size].id
+                matchedTarget != null -> matchedTarget.id
+                ++missedLockedTargetFrames > TARGET_LOCK_MISSED_FRAME_TIMEOUT -> null
+                else -> currentSelectedId
+            }
+            if (matchedTarget != null) {
+                lockedTargetRect = RectF(matchedTarget.normalizedRect)
+                missedLockedTargetFrames = 0
+            } else if (validSelectedId == null) {
+                lockedTargetRect = null
+                missedLockedTargetFrames = 0
             }
             _selectedTrackId.value = validSelectedId
             val updated = boxes.map { box ->
@@ -135,11 +154,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _trackedObjects.value = updated
             _detectedSpecies.value = validSelectedId?.let { _boxSpeciesMap.value[it] }
         } else {
+            if (currentSelectedId != null && ++missedLockedTargetFrames > TARGET_LOCK_MISSED_FRAME_TIMEOUT) {
+                _selectedTrackId.value = null
+                lockedTargetRect = null
+                missedLockedTargetFrames = 0
+            }
             // Giữ lại các candidate boxes nếu camera chưa phát hiện được vật thể mới
             val current = _trackedObjects.value.ifEmpty { getDefaultCandidateBoxes() }
             _trackedObjects.value = current.map { box ->
                 box.copy(
-                    isSelected = (box.id == currentSelectedId),
+                    isSelected = (box.id == _selectedTrackId.value),
                     identifiedSpecies = _boxSpeciesMap.value[box.id]
                 )
             }
@@ -155,6 +179,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _notOrganism.value = null
         val validTrackId = trackId?.takeIf { id -> _trackedObjects.value.any { it.id == id } }
         _selectedTrackId.value = validTrackId
+        lockedTargetRect = validTrackId
+            ?.let { id -> _trackedObjects.value.firstOrNull { it.id == id } }
+            ?.let { RectF(it.normalizedRect) }
+        missedLockedTargetFrames = 0
         _trackedObjects.value = _trackedObjects.value.map { box ->
             box.copy(
                 isSelected = (validTrackId != null && box.id == validTrackId),
@@ -213,7 +241,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         _trackedObjects.value = updatedList
         _selectedTrackId.value = newId
+        lockedTargetRect = RectF(newRect)
+        missedLockedTargetFrames = 0
         _detectedSpecies.value = null // Sẵn sàng để quét mục tiêu vừa chọn
+    }
+
+    private fun findLockedTarget(
+        previousRect: RectF,
+        boxes: List<TrackedBoundingBox>
+    ): TrackedBoundingBox? {
+        return boxes.map { box ->
+            val iou = intersectionOverUnion(previousRect, box.normalizedRect)
+            val dx = previousRect.centerX() - box.normalizedRect.centerX()
+            val dy = previousRect.centerY() - box.normalizedRect.centerY()
+            Triple(box, iou, sqrt(dx * dx + dy * dy))
+        }.filter { (_, iou, distance) ->
+            iou >= TARGET_LOCK_MIN_IOU || distance <= TARGET_LOCK_MAX_CENTER_DISTANCE
+        }.sortedWith(
+            compareByDescending<Triple<TrackedBoundingBox, Float, Float>> { it.second }
+                .thenBy { it.third }
+        ).firstOrNull()?.first
+    }
+
+    private fun intersectionOverUnion(first: RectF, second: RectF): Float {
+        val intersectionWidth = (minOf(first.right, second.right) - maxOf(first.left, second.left))
+            .coerceAtLeast(0f)
+        val intersectionHeight = (minOf(first.bottom, second.bottom) - maxOf(first.top, second.top))
+            .coerceAtLeast(0f)
+        val intersection = intersectionWidth * intersectionHeight
+        val union = first.width() * first.height() + second.width() * second.height() - intersection
+        return if (union > 0f) intersection / union else 0f
     }
 
     /**
