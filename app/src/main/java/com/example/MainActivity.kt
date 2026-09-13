@@ -2,6 +2,7 @@ package com.example
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -176,7 +177,7 @@ fun MysteriesOfNatureApp(
         // Copy both values synchronously. Tracking may publish another list during capture.
         val clickTrackId = selectedTrackId
         val clickRect = clickTrackId?.let { id ->
-            trackedObjects.firstOrNull { it.id == id }?.normalizedRect?.let(::android.graphics.RectF)
+            trackedObjects.firstOrNull { it.id == id }?.normalizedRect?.let { RectF(it) }
         }
         if (clickTrackId == null || clickRect == null) {
             viewModel.requireTargetSelection()
@@ -191,7 +192,7 @@ fun MysteriesOfNatureApp(
         }
 
         if (!viewModel.beginCapture(clickTrackId, clickRect)) return
-        val previewRect = android.graphics.RectF(
+        val previewRect = RectF(
             clickRect.left * view.width, clickRect.top * view.height,
             clickRect.right * view.width, clickRect.bottom * view.height
         )
