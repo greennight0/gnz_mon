@@ -8,6 +8,7 @@ import com.example.data.local.SpeciesDao
 import com.example.data.model.SocialLink
 import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesInfo
+import com.example.data.model.ScanTransportPhase
 import kotlinx.coroutines.flow.Flow
 
 class SpeciesRepository(context: Context) {
@@ -35,9 +36,10 @@ class SpeciesRepository(context: Context) {
 
     suspend fun identifyImage(
         bitmap: Bitmap,
-        customApiKey: String? = null
+        customApiKey: String? = null,
+        onPhase: (ScanTransportPhase) -> Unit = {}
     ): RecognitionResult {
-        val result = geminiVisionClient.identifyFloraOrFauna(bitmap, customApiKey)
+        val result = geminiVisionClient.identifyFloraOrFauna(bitmap, customApiKey, onPhase)
         if (result is RecognitionResult.Organism) {
             saveSpeciesToJournal(result.species)
         }

@@ -12,6 +12,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -52,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -62,6 +64,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import com.example.R
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
@@ -76,6 +80,7 @@ import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesCategory
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
+import com.example.data.model.ScanState
 import com.example.ui.theme.AmberGlow
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.LaserCyan
@@ -84,6 +89,15 @@ import com.example.ui.theme.NeonEmerald
 import kotlin.math.min
 
 private const val TOUCH_PADDING_DP = 20f
+
+@Composable
+private fun phaseLabel(state: ScanState, isVi: Boolean): String = stringResource(when (state) {
+    is ScanState.CapturingFrame -> if (isVi) R.string.scan_phase_capturing_vi else R.string.scan_phase_capturing_en
+    is ScanState.CroppingTarget -> if (isVi) R.string.scan_phase_cropping_vi else R.string.scan_phase_cropping_en
+    is ScanState.EncodingImage -> if (isVi) R.string.scan_phase_encoding_vi else R.string.scan_phase_encoding_en
+    is ScanState.Uploading -> if (isVi) R.string.scan_phase_uploading_vi else R.string.scan_phase_uploading_en
+    else -> if (isVi) R.string.scan_phase_analyzing_vi else R.string.scan_phase_analyzing_en
+})
 
 /**
  * Finds the best tracked box for a tap without depending on a Canvas or Compose state.
@@ -151,6 +165,8 @@ fun ScannerOverlay(
     detectedSpecies: SpeciesInfo?,
     notOrganism: RecognitionResult.NotOrganism? = null,
     isAnalyzing: Boolean,
+    scanState: ScanState = ScanState.Idle,
+    scanThumbnail: android.graphics.Bitmap? = null,
     language: AppLanguage,
     trackedObjects: List<TrackedBoundingBox> = emptyList(),
     selectedTrackId: Int? = null,
@@ -167,6 +183,12 @@ fun ScannerOverlay(
 ) {
     val isVi = language == AppLanguage.VIETNAMESE
     val density = LocalDensity.current
+    val snapshot = scanState as? ScanState.Tracked
+    val displayedTrackedObjects = if (snapshot != null) {
+        trackedObjects.map { box ->
+            if (box.id == snapshot.trackId) box.copy(normalizedRect = android.graphics.RectF(snapshot.snapshotRect)) else box
+        }
+    } else trackedObjects
     // Pulse transition for tracking breathing animation
     val infiniteTransition = rememberInfiniteTransition(label = "tracking_pulse")
     val pulseGlow by infiniteTransition.animateFloat(
@@ -241,11 +263,11 @@ fun ScannerOverlay(
             modifier = Modifier
                 .fillMaxSize()
                 .testTag("bounding_box_canvas")
-                .pointerInput(trackedObjects, selectedTrackId, screenW, screenH, touchPaddingPx) {
+                .pointerInput(displayedTrackedObjects, selectedTrackId, screenW, screenH, touchPaddingPx) {
                     detectTapGestures { tapPosition ->
                         val hitBox = hitTestTrackedBoxes(
                             tapPosition = tapPosition,
-                            trackedObjects = trackedObjects,
+                            trackedObjects = displayedTrackedObjects,
                             selectedTrackId = selectedTrackId,
                             screenW = screenW,
                             screenH = screenH,
@@ -269,8 +291,8 @@ fun ScannerOverlay(
         ) {
             // Khi có đối tượng được phát hiện từ Object Detection & Tracking pipeline
             // Khung lớn vẽ trước, khung nhỏ vẽ sau, khung đang chọn vẽ trên cùng để không bị đè che
-            if (trackedObjects.isNotEmpty()) {
-                val sortedForCanvas = trackedObjects.sortedWith(
+            if (displayedTrackedObjects.isNotEmpty()) {
+                val sortedForCanvas = displayedTrackedObjects.sortedWith(
                     compareBy<com.example.data.model.TrackedBoundingBox> { box ->
                         if (box.id == selectedTrackId) 2 else 1
                     }.thenByDescending { box ->
@@ -434,8 +456,8 @@ fun ScannerOverlay(
 
         // Invisible semantics targets keep boxes accessible to keyboard and test actions.
         // Physical taps are handled once by the canvas pointer input above.
-        if (trackedObjects.isNotEmpty()) {
-            val sortedForHitTargets = trackedObjects.sortedWith(
+        if (displayedTrackedObjects.isNotEmpty()) {
+            val sortedForHitTargets = displayedTrackedObjects.sortedWith(
                 compareBy<TrackedBoundingBox> { box ->
                     if (box.id == selectedTrackId) 2 else 1
                 }.thenByDescending { box ->
@@ -480,8 +502,8 @@ fun ScannerOverlay(
 
         // 2. ATTACHED TRACKING BADGES (Hiển thị thẻ Tracking ID & nhãn phân loại trên từng Bounding Box)
         // Sắp xếp: Box lớn ở dưới, Box nhỏ ở trên, và Box đang được chọn ở trên cùng nhất để không bị che khuất
-        if (trackedObjects.isNotEmpty()) {
-            val sortedForBadges = trackedObjects.sortedWith(
+        if (displayedTrackedObjects.isNotEmpty()) {
+            val sortedForBadges = displayedTrackedObjects.sortedWith(
                 compareBy<com.example.data.model.TrackedBoundingBox> { box ->
                     if (box.id == selectedTrackId) 2 else 1
                 }.thenByDescending { box ->
@@ -699,6 +721,13 @@ fun ScannerOverlay(
             }
         }
 
+        if (scanState is ScanState.CapturingFrame) {
+            Box(
+                Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.32f))
+                    .testTag("capture_flash")
+            )
+        }
+
         // 4. BOTTOM SECTION: Species Info Tag (nếu có) / Active Target HUD + Capture Trigger
         Column(
             modifier = Modifier
@@ -709,6 +738,16 @@ fun ScannerOverlay(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // 4.1 Scanning Animation State
+            if (scanState is ScanState.Tracked && scanThumbnail != null) {
+                Image(
+                    bitmap = scanThumbnail.asImageBitmap(),
+                    contentDescription = stringResource(if (isVi) R.string.scan_thumbnail_vi else R.string.scan_thumbnail_en),
+                    modifier = Modifier.size(72.dp).clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, CyberCyan, RoundedCornerShape(10.dp))
+                        .testTag("scan_thumbnail")
+                )
+            }
+
             if (isAnalyzing) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
@@ -729,10 +768,11 @@ fun ScannerOverlay(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = if (isVi) "ĐANG QUÉT & PHÂN TÍCH MỤC TIÊU..." else "SCANNING & ANALYZING TARGET...",
+                            text = phaseLabel(scanState, isVi),
                             color = Color.White,
                             fontSize = 12.5.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.testTag("scan_phase_progress")
                         )
                     }
                 }
@@ -751,6 +791,13 @@ fun ScannerOverlay(
                     result = notOrganism,
                     language = language,
                     onRescanClick = onRescanTarget
+                )
+            } else if (scanState is ScanState.Failed) {
+                Text(
+                    text = stringResource(if (isVi) R.string.scan_failed_vi else R.string.scan_failed_en),
+                    color = AmberGlow,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.testTag("scan_error")
                 )
             }
 

@@ -58,6 +58,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.AppLanguage
 import com.example.data.model.AppThemeMode
+import com.example.data.model.ScanException
+import com.example.data.model.ScanFailureReason
 import com.example.ui.MainViewModel
 import com.example.ui.ScanRequest
 import com.example.ui.camera.CameraController
@@ -114,6 +116,8 @@ fun MysteriesOfNatureApp(
     val trackedObjects by viewModel.trackedObjects.collectAsState()
     val selectedTrackId by viewModel.selectedTrackId.collectAsState()
     val recognitionError by viewModel.recognitionError.collectAsState()
+    val scanState by viewModel.scanState.collectAsState()
+    val scanThumbnail by viewModel.scanThumbnail.collectAsState()
     val targetSelectionRequired by viewModel.targetSelectionRequired.collectAsState()
     val notOrganism by viewModel.notOrganism.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -150,11 +154,9 @@ fun MysteriesOfNatureApp(
 
     LaunchedEffect(recognitionError, language) {
         if (recognitionError != null) {
+            val reason = (recognitionError as? ScanException)?.reason
             snackbarHostState.showSnackbar(
-                if (language == AppLanguage.VIETNAMESE)
-                    "Không thể đọc hoặc nhận diện ảnh. Vui lòng thử lại."
-                else
-                    "The image could not be read or identified. Please try again."
+                localizedScanError(context, language, reason)
             )
             viewModel.clearRecognitionError()
         }
@@ -181,12 +183,13 @@ fun MysteriesOfNatureApp(
         if (clickTrackId == null || clickRect == null) {
             viewModel.requireTargetSelection()
         } else if (view != null && view.width > 0 && view.height > 0) {
+            if (!viewModel.beginCapture(clickTrackId, clickRect)) return
             val previewRect = android.graphics.RectF(
                 clickRect.left * view.width, clickRect.top * view.height,
                 clickRect.right * view.width, clickRect.bottom * view.height
             )
             controller.captureTarget(TargetCaptureRequest(clickTrackId, previewRect)) { snapshot ->
-                viewModel.analyzeImage(ScanRequest(snapshot.trackId, snapshot.bitmap))
+                viewModel.analyzeImage(ScanRequest(snapshot.trackId, snapshot.bitmap, clickRect))
             }
         } else {
             viewModel.reportRecognitionError(IllegalStateException("Camera preview is not ready"))
@@ -232,6 +235,8 @@ fun MysteriesOfNatureApp(
                     detectedSpecies = detectedSpecies,
                     notOrganism = notOrganism,
                     isAnalyzing = isAnalyzing,
+                    scanState = scanState,
+                    scanThumbnail = scanThumbnail,
                     language = language,
                     trackedObjects = trackedObjects,
                     selectedTrackId = selectedTrackId,
@@ -290,6 +295,24 @@ fun MysteriesOfNatureApp(
             }
         }
     }
+}
+
+private fun localizedScanError(
+    context: android.content.Context,
+    language: AppLanguage,
+    reason: ScanFailureReason?
+): String {
+    val vi = language == AppLanguage.VIETNAMESE
+    val id = when (reason) {
+        ScanFailureReason.MissingApiKey -> if (vi) R.string.scan_error_api_key_vi else R.string.scan_error_api_key_en
+        ScanFailureReason.Network -> if (vi) R.string.scan_error_network_vi else R.string.scan_error_network_en
+        ScanFailureReason.Timeout -> if (vi) R.string.scan_error_timeout_vi else R.string.scan_error_timeout_en
+        ScanFailureReason.EmptyResponse -> if (vi) R.string.scan_error_empty_vi else R.string.scan_error_empty_en
+        ScanFailureReason.InvalidResponse, null -> if (vi) R.string.scan_error_invalid_vi else R.string.scan_error_invalid_en
+        is ScanFailureReason.LowConfidence -> if (vi) R.string.scan_error_confidence_vi else R.string.scan_error_confidence_en
+        is ScanFailureReason.Http -> if (vi) R.string.scan_error_http_vi else R.string.scan_error_http_en
+    }
+    return if (reason is ScanFailureReason.Http) context.getString(id, reason.statusCode) else context.getString(id)
 }
 
 /**
