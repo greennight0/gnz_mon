@@ -39,6 +39,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.model.TrackedBoundingBox
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -117,6 +118,13 @@ class CameraController(
         imageAnalysis = useCase.takeIf { analyzer != null }
         if (previous != null) analysisExecutor.execute(previous::close)
         if (analyzer != null) useCase.setAnalyzer(analysisExecutor, analyzer)
+    }
+
+    /** Removes only the analyzer which raised the terminal error. A delayed callback from an old
+     * generation must not tear down a replacement that has already been installed. */
+    fun removeFailedAnalyzer(useCase: ImageAnalysis, failedAnalyzer: ObjectDetectorAnalyzer) {
+        check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
+        if (currentAnalyzer === failedAnalyzer) replaceAnalyzer(useCase, null)
     }
 
     fun takePhoto() {
@@ -353,7 +361,9 @@ fun CameraPreviewView(
                     .build()
 
                 if (engine !== DisabledObjectDetectorEngine) {
-                    val analyzer = ObjectDetectorAnalyzer(
+                    val replacementRequested = AtomicBoolean(false)
+                    lateinit var analyzer: ObjectDetectorAnalyzer
+                    analyzer = ObjectDetectorAnalyzer(
                         engine = engine,
                         onObjectsTracked = { boxes, latency, imageProxy ->
                             val mapped = mapBoxesToPreview(boxes, imageProxy, previewView)
@@ -363,7 +373,16 @@ fun CameraPreviewView(
                         },
                         onDetectionError = { error ->
                             logDetectorFailure(error, temporary = error !is PermanentDetectorException)
-                            ContextCompat.getMainExecutor(context).execute { onDetectorError(error) }
+                            ContextCompat.getMainExecutor(context).execute {
+                                onDetectorError(error)
+                                if (error is PermanentDetectorException &&
+                                    replacementRequested.compareAndSet(false, true)
+                                ) {
+                                    // replaceAnalyzer clears delivery first and queues close behind
+                                    // all frames already submitted to the analysis executor.
+                                    cameraController.removeFailedAnalyzer(imageAnalysis, analyzer)
+                                }
+                            }
                         }
                     )
                     cameraController.replaceAnalyzer(imageAnalysis, analyzer)
