@@ -122,13 +122,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val currentSelectedId = _selectedTrackId.value
 
         if (boxes.isNotEmpty()) {
+            val previousIndex = _trackedObjects.value.indexOfFirst { it.id == currentSelectedId }
+            val validSelectedId = when {
+                currentSelectedId == null -> null
+                boxes.any { it.id == currentSelectedId } -> currentSelectedId
+                else -> boxes[previousIndex.coerceAtLeast(0) % boxes.size].id
+            }
+            _selectedTrackId.value = validSelectedId
             val updated = boxes.map { box ->
                 box.copy(
-                    isSelected = (box.id == currentSelectedId),
+                    isSelected = (box.id == validSelectedId),
                     identifiedSpecies = _boxSpeciesMap.value[box.id]
                 )
             }
             _trackedObjects.value = updated
+            _detectedSpecies.value = validSelectedId?.let { _boxSpeciesMap.value[it] }
         } else {
             // Giữ lại các candidate boxes nếu camera chưa phát hiện được vật thể mới
             val current = _trackedObjects.value.ifEmpty { getDefaultCandidateBoxes() }
@@ -147,15 +155,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * hoặc sẵn sàng quét mới nếu box đó chưa từng được quét.
      */
     fun selectTrack(trackId: Int?) {
-        _selectedTrackId.value = trackId
+        val validTrackId = trackId?.takeIf { id -> _trackedObjects.value.any { it.id == id } }
+        _selectedTrackId.value = validTrackId
         _trackedObjects.value = _trackedObjects.value.map { box ->
             box.copy(
-                isSelected = (trackId != null && box.id == trackId),
+                isSelected = (validTrackId != null && box.id == validTrackId),
                 identifiedSpecies = _boxSpeciesMap.value[box.id]
             )
         }
         // Hiển thị kết quả của box này nếu đã từng phân tích, ngược lại trả về null để sẵn sàng quét
-        _detectedSpecies.value = trackId?.let { _boxSpeciesMap.value[it] }
+        _detectedSpecies.value = validTrackId?.let { _boxSpeciesMap.value[it] }
     }
 
     /**
