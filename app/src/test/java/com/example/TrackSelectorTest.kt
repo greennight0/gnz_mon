@@ -23,12 +23,15 @@ import com.example.data.model.AppLanguage
 import com.example.data.model.SpeciesCategory
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
+import com.example.ui.MainViewModel
 import com.example.ui.components.ScannerOverlay
+import com.example.ui.components.hitTestTrackedBoxes
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -192,5 +195,110 @@ class TrackSelectorTest {
         assertEquals(emptyList<Int?>(), selections)
         composeRule.onNodeWithTag("bounding_box_target_42").assertIsSelected()
         composeRule.onNodeWithTag("capture_button").assertExists()
+    }
+
+    @Test
+    fun hitTestIncludesPaddingJustOutsideBoxEdge() {
+        val hit = hitTestTrackedBoxes(
+            tapPosition = Offset(75f, 320f), // 5 px left of the box on a 400 px-wide surface.
+            trackedObjects = listOf(trackedBox),
+            selectedTrackId = null,
+            screenW = 400f,
+            screenH = 800f,
+            touchPaddingPx = 20f
+        )
+
+        assertEquals(42, hit?.id)
+    }
+
+    @Test
+    fun overlappingHitTargetsPreferSelectedThenSmallestBox() {
+        val large = trackedBox.copy(id = 1, normalizedRect = RectF(0.1f, 0.1f, 0.8f, 0.8f))
+        val small = trackedBox.copy(id = 2, normalizedRect = RectF(0.35f, 0.35f, 0.55f, 0.55f))
+        val tap = Offset(180f, 360f)
+
+        assertEquals(
+            1,
+            hitTestTrackedBoxes(tap, listOf(large, small), 1, 400f, 800f, 20f)?.id
+        )
+        assertEquals(
+            2,
+            hitTestTrackedBoxes(tap, listOf(large, small), null, 400f, 800f, 20f)?.id
+        )
+    }
+
+    @Test
+    fun nearMissOnSelectedBoxDoesNotSelectOverlappingNeighbour() {
+        val selected = trackedBox.copy(id = 1, normalizedRect = RectF(0.2f, 0.2f, 0.4f, 0.4f))
+        val neighbour = trackedBox.copy(id = 2, normalizedRect = RectF(0.41f, 0.2f, 0.7f, 0.4f))
+
+        val hit = hitTestTrackedBoxes(
+            Offset(164f, 240f), // Just outside selected, inside neighbour's padded target.
+            listOf(neighbour, selected),
+            selectedTrackId = 1,
+            screenW = 400f,
+            screenH = 800f,
+            touchPaddingPx = 20f
+        )
+
+        assertEquals(1, hit?.id)
+    }
+
+    @Test
+    fun tappingJustOutsideSelectedBoxKeepsSelection() {
+        val selections = mutableListOf<Int?>()
+        var selectedId by mutableStateOf<Int?>(42)
+        composeRule.setContent {
+            ScannerOverlay(
+                modifier = Modifier.size(400.dp, 800.dp),
+                detectedSpecies = null,
+                isAnalyzing = false,
+                language = AppLanguage.VIETNAMESE,
+                trackedObjects = listOf(trackedBox),
+                selectedTrackId = selectedId,
+                onSelectTrack = {
+                    selectedId = it
+                    selections += it
+                },
+                onSpeciesClick = {},
+                onCaptureClick = {}
+            )
+        }
+
+        // The visual left edge is x=80; x=75 is within the 20dp forgiving hit area.
+        composeRule.onNodeWithTag("bounding_box_canvas")
+            .performTouchInput { click(Offset(75f, 320f)) }
+
+        assertEquals(emptyList<Int?>(), selections)
+        composeRule.onNodeWithTag("bounding_box_target_42").assertIsSelected()
+    }
+
+    @Test
+    fun targetLockFollowsMovingBoxWhenDetectorChangesId() {
+        val viewModel = MainViewModel(RuntimeEnvironment.getApplication())
+        val first = trackedBox.copy(id = 10, normalizedRect = RectF(0.20f, 0.20f, 0.50f, 0.50f))
+        val moved = trackedBox.copy(id = 99, normalizedRect = RectF(0.24f, 0.22f, 0.54f, 0.52f))
+        viewModel.onObjectsTracked(listOf(first), 16)
+        viewModel.selectTrack(10)
+
+        viewModel.onObjectsTracked(listOf(moved), 16)
+
+        assertEquals(99, viewModel.selectedTrackId.value)
+        assertEquals(true, viewModel.trackedObjects.value.single().isSelected)
+    }
+
+    @Test
+    fun targetLockSurvivesBriefMissingDetectionAndStableIdReturn() {
+        val viewModel = MainViewModel(RuntimeEnvironment.getApplication())
+        val target = trackedBox.copy(id = 10)
+        viewModel.onObjectsTracked(listOf(target), 16)
+        viewModel.selectTrack(10)
+
+        repeat(3) { viewModel.onObjectsTracked(emptyList(), 16) }
+        assertEquals(10, viewModel.selectedTrackId.value)
+
+        viewModel.onObjectsTracked(listOf(target.copy(normalizedRect = RectF(0.22f, 0.25f, 0.62f, 0.55f))), 16)
+        assertEquals(10, viewModel.selectedTrackId.value)
+        assertEquals(true, viewModel.trackedObjects.value.single().isSelected)
     }
 }
