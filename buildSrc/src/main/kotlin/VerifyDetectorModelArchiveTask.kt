@@ -13,6 +13,9 @@ abstract class VerifyDetectorModelArchiveTask : DefaultTask() {
   abstract val variantName: Property<String>
 
   @get:Input
+  abstract val archiveKind: Property<String>
+
+  @get:Input
   abstract val expectedAssetPath: Property<String>
 
   @get:Input
@@ -29,16 +32,12 @@ abstract class VerifyDetectorModelArchiveTask : DefaultTask() {
   @TaskAction
   fun verify() {
     val name = variantName.get()
+    val kind = archiveKind.get()
     val assetPath = expectedAssetPath.get()
     val minimumBytes = minimumByteCount.get()
-    val packagedArchives = archives.files.asSequence()
-      .flatMap { artifact ->
-        if (artifact.isDirectory) artifact.walkTopDown().asSequence() else sequenceOf(artifact)
-      }
-      .filter { it.isFile && (it.extension == "apk" || it.extension == "aab") }
-      .toList()
+    val packagedArchives = archives.files.filter { it.isFile }
 
-    check(packagedArchives.isNotEmpty()) { "No $name APK/AAB found in the configured artifacts" }
+    check(packagedArchives.isNotEmpty()) { "No $name $kind found in the configured artifacts" }
     packagedArchives.forEach { archive ->
       ZipFile(archive).use { zip ->
         val matches = zip.entries().asSequence()
