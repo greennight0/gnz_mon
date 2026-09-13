@@ -36,6 +36,7 @@ sealed interface ScanFailureReason {
     data object Network : ScanFailureReason
     data object EmptyResponse : ScanFailureReason
     data object InvalidResponse : ScanFailureReason
+    data object Unexpected : ScanFailureReason
     data class LowConfidence(val confidence: Int) : ScanFailureReason
 }
 

@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -74,6 +75,7 @@ import com.example.ui.theme.MyApplicationTheme
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import kotlinx.coroutines.CancellationException
 
 class MainActivity : ComponentActivity() {
 
@@ -154,12 +156,15 @@ fun MysteriesOfNatureApp(
     var isSnsOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(recognitionError, language) {
-        if (recognitionError != null) {
-            val reason = (recognitionError as? ScanException)?.reason
-            snackbarHostState.showSnackbar(
-                localizedScanError(context, language, reason)
+        recognitionError?.let { error ->
+            showRecognitionErrorSnackbar(
+                error = error,
+                buildMessage = {
+                    localizedScanError(context, language, (error as? ScanException)?.reason)
+                },
+                showMessage = { snackbarHostState.showSnackbar(it) },
+                onHandled = viewModel::clearRecognitionError
             )
-            viewModel.clearRecognitionError()
         }
     }
 
@@ -302,6 +307,24 @@ fun MysteriesOfNatureApp(
     }
 }
 
+internal suspend fun showRecognitionErrorSnackbar(
+    error: Throwable,
+    buildMessage: () -> String,
+    showMessage: suspend (String) -> Unit,
+    onHandled: () -> Unit
+) {
+    try {
+        showMessage(buildMessage())
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (failure: Exception) {
+        failure.addSuppressed(error)
+        Log.e("MainActivity", "Unable to build or display recognition error Snackbar", failure)
+    } finally {
+        onHandled()
+    }
+}
+
 private fun localizedScanError(
     context: android.content.Context,
     language: AppLanguage,
@@ -314,6 +337,7 @@ private fun localizedScanError(
         ScanFailureReason.Timeout -> if (vi) R.string.scan_error_timeout_vi else R.string.scan_error_timeout_en
         ScanFailureReason.EmptyResponse -> if (vi) R.string.scan_error_empty_vi else R.string.scan_error_empty_en
         ScanFailureReason.InvalidResponse, null -> if (vi) R.string.scan_error_invalid_vi else R.string.scan_error_invalid_en
+        ScanFailureReason.Unexpected -> if (vi) R.string.scan_error_invalid_vi else R.string.scan_error_invalid_en
         is ScanFailureReason.LowConfidence -> if (vi) R.string.scan_error_confidence_vi else R.string.scan_error_confidence_en
         is ScanFailureReason.Http -> if (vi) R.string.scan_error_http_vi else R.string.scan_error_http_en
     }

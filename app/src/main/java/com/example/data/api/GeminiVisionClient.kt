@@ -148,23 +148,33 @@ class GeminiVisionClient {
             mapTransportFailure(e)
         } catch (e: Exception) {
             Log.e("GeminiVisionClient", "Error analyzing image: ${e.message}", e)
-            failure(ScanFailureReason.InvalidResponse, e)
+            failure(ScanFailureReason.Unexpected, e)
         }
     }
 
     internal fun parseApiResponse(code: Int, successful: Boolean, body: String?): RecognitionResult {
-        if (!successful) return failure(ScanFailureReason.Http(code))
-        if (body.isNullOrBlank()) return failure(ScanFailureReason.EmptyResponse)
+        if (!successful) {
+            logResponseError(code, "HttpError")
+            return failure(ScanFailureReason.Http(code))
+        }
+        if (body.isNullOrBlank()) {
+            logResponseError(code, "EmptyResponse")
+            return failure(ScanFailureReason.EmptyResponse)
+        }
         val rootJson = try {
             JSONObject(body)
         } catch (error: Exception) {
+            logResponseError(code, error.javaClass.simpleName, throwable = error)
             return failure(ScanFailureReason.InvalidResponse, error)
         }
         val rawText = rootJson.optJSONArray("candidates")?.optJSONObject(0)
             ?.optJSONObject("content")?.optJSONArray("parts")
             ?.optJSONObject(0)?.optString("text").orEmpty()
-        if (rawText.isBlank()) return failure(ScanFailureReason.EmptyResponse)
-        return parseSpeciesJson(cleanJsonString(rawText))
+        if (rawText.isBlank()) {
+            logResponseError(code, "MissingRequiredField", "candidates[0].content.parts[0].text")
+            return failure(ScanFailureReason.EmptyResponse)
+        }
+        return parseSpeciesJson(cleanJsonString(rawText), code)
     }
 
     internal fun mapTransportFailure(error: IOException): RecognitionResult.Failure =
@@ -184,21 +194,23 @@ class GeminiVisionClient {
         return clean.trim()
     }
 
-    internal fun parseSpeciesJson(jsonString: String): RecognitionResult {
+    internal fun parseSpeciesJson(jsonString: String, httpStatus: Int = 200): RecognitionResult {
         return try {
             parseRecognitionJson(JSONObject(jsonString))
         } catch (error: Exception) {
+            val missingField = (error as? MissingRequiredFieldException)?.field
+            logResponseError(httpStatus, error.javaClass.simpleName, missingField, error)
             failure(ScanFailureReason.InvalidResponse, error)
         }
     }
 
     private fun parseRecognitionJson(json: JSONObject): RecognitionResult {
-        require(json.has("isLivingOrganism")) { "Missing isLivingOrganism" }
+        if (!json.has("isLivingOrganism")) throw MissingRequiredFieldException("isLivingOrganism")
         val confidence = json.optInt("confidenceScore", -1)
         require(confidence in 0..100) { "Invalid confidenceScore" }
         if (!json.getBoolean("isLivingOrganism")) {
             val label = json.optString("objectLabel").trim()
-            require(label.isNotEmpty()) { "Missing objectLabel for non-organism" }
+            if (label.isEmpty()) throw MissingRequiredFieldException("objectLabel")
             return RecognitionResult.NotOrganism(label, confidence)
         }
         if (confidence < MINIMUM_CONFIDENCE) {
@@ -206,7 +218,7 @@ class GeminiVisionClient {
         }
 
         fun required(name: String): String = json.optString(name).trim().also {
-            require(it.isNotEmpty()) { "Missing taxonomy field: $name" }
+            if (it.isEmpty()) throw MissingRequiredFieldException(name)
         }
         val category = try {
             SpeciesCategory.valueOf(required("category").uppercase())
@@ -262,6 +274,22 @@ class GeminiVisionClient {
 
     private companion object {
         const val MINIMUM_CONFIDENCE = 70
+        const val TAG = "GeminiVisionClient"
+    }
+
+    private class MissingRequiredFieldException(val field: String) :
+        IllegalArgumentException("Missing required response field: $field")
+
+    private fun logResponseError(
+        httpStatus: Int,
+        jsonErrorType: String,
+        missingRequiredField: String? = null,
+        throwable: Throwable? = null
+    ) {
+        // Deliberately log metadata only: never the URL/API key, response body, prompt, or image data.
+        val message = "Response analysis failed: httpStatus=$httpStatus, " +
+            "jsonErrorType=$jsonErrorType, missingRequiredField=${missingRequiredField ?: "none"}"
+        if (throwable == null) Log.e(TAG, message) else Log.e(TAG, message, throwable)
     }
 
     private fun failure(reason: ScanFailureReason, cause: Throwable? = null) =

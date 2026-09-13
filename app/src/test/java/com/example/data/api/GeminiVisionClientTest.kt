@@ -17,6 +17,7 @@ import java.net.SocketTimeoutException
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -85,6 +86,32 @@ class GeminiVisionClientTest {
     @Test fun `invalid json has its own category`() = assertFailure(
         client.parseApiResponse(200, true, "not json"), ScanFailureReason.InvalidResponse
     )
+
+    @Test fun `malformed response log contains safe diagnostics only`() {
+        ShadowLog.clear()
+        val sensitiveBody = "not-json-API_KEY_secret-imageBase64"
+
+        assertFailure(client.parseApiResponse(422, true, sensitiveBody), ScanFailureReason.InvalidResponse)
+
+        val log = ShadowLog.getLogsForTag("GeminiVisionClient").joinToString { it.msg }
+        assertTrue(log.contains("httpStatus=422"))
+        assertTrue(log.contains("jsonErrorType=JSONException"))
+        assertTrue(log.contains("missingRequiredField=none"))
+        assertTrue(!log.contains(sensitiveBody))
+        assertTrue(!log.contains("API_KEY_secret"))
+    }
+
+    @Test fun `missing required response field is logged by name without response data`() {
+        ShadowLog.clear()
+        val json = validOrganismJson().replace("\"family\":\"Passeridae\",", "")
+
+        assertFailure(client.parseSpeciesJson(json), ScanFailureReason.InvalidResponse)
+
+        val log = ShadowLog.getLogsForTag("GeminiVisionClient").joinToString { it.msg }
+        assertTrue(log.contains("httpStatus=200"))
+        assertTrue(log.contains("missingRequiredField=family"))
+        assertTrue(!log.contains("Passer domesticus"))
+    }
 
     @Test fun `timeout has its own category`() = assertFailure(
         client.mapTransportFailure(SocketTimeoutException()), ScanFailureReason.Timeout
