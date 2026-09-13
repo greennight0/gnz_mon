@@ -1,5 +1,7 @@
 package com.example.ui.camera
 
+import com.example.data.model.DetectorStage
+
 import android.graphics.RectF
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals

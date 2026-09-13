@@ -1,5 +1,7 @@
 package com.example.ui.camera
 
+import com.example.data.model.DetectorStage
+
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix

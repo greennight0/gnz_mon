@@ -11,16 +11,20 @@ import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.AppLanguage
 import com.example.data.model.DetectorErrorType
 import com.example.data.model.DetectorState
+import com.example.data.model.DetectorStage
 import com.example.data.model.ScanFailureReason
 import com.example.data.model.ScanState
 import com.example.ui.MainViewModel
 import com.example.ui.ScanRequest
 import com.example.ui.components.ScannerOverlay
 import com.example.ui.components.FRAME_ERROR_DISPLAY_MILLIS
+import com.example.ui.components.detectorStageCode
+import com.example.ui.camera.DetectorStageException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
@@ -122,17 +126,44 @@ class ScanStateUiTest {
             )
         }
         composeRule.onNodeWithTag("detector_status_guidance")
-            .assertTextEquals("This frame could not be processed. Detection is still running.")
+            .assertTextEquals("This frame could not be processed. Detection is still running. [CAM-FRAME]")
+        composeRule.onNodeWithText("frame bytes", substring = true).assertDoesNotExist()
         composeRule.onNodeWithTag("retry_detector_button").assertDoesNotExist()
 
         state = DetectorState.NoObjects
         composeRule.mainClock.advanceTimeByFrame()
         composeRule.mainClock.advanceTimeBy(FRAME_ERROR_DISPLAY_MILLIS - 1)
         composeRule.onNodeWithTag("detector_status_guidance")
-            .assertTextEquals("This frame could not be processed. Detection is still running.")
+            .assertTextEquals("This frame could not be processed. Detection is still running. [CAM-FRAME]")
         composeRule.mainClock.advanceTimeBy(1)
         composeRule.onNodeWithTag("detector_status_guidance")
             .assertTextEquals("No object detected. Point the camera at an organism.")
+    }
+
+    @Test fun `frame stages use safe diagnostic codes without exception details`() {
+        assertEquals(
+            listOf("CAM-FRAME", "MP-IMAGE", "MP-DETECT"),
+            listOf(
+                DetectorStage.IMAGE_TO_BITMAP,
+                DetectorStage.MP_IMAGE_CREATION,
+                DetectorStage.DETECTOR_DETECT
+            ).map(::detectorStageCode)
+        )
+
+        setDetectorState(
+            DetectorState.FrameError(
+                DetectorStageException(
+                    DetectorStage.MP_IMAGE_CREATION,
+                    "secret message and stack",
+                    IllegalStateException()
+                ),
+                stage = DetectorStage.MP_IMAGE_CREATION
+            )
+        )
+        composeRule.onNodeWithTag("detector_status_guidance")
+            .assertTextEquals("This frame could not be processed. Detection is still running. [MP-IMAGE]")
+        composeRule.onNodeWithText("secret", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("IllegalStateException", substring = true).assertDoesNotExist()
     }
 
     @Test fun `prolonged frame error offers retry after threshold`() {
@@ -143,7 +174,7 @@ class ScanStateUiTest {
             )
         )
         composeRule.onNodeWithTag("detector_status_guidance")
-            .assertTextEquals("This frame could not be processed. Please try again.", "Retry detector")
+            .assertTextEquals("This frame could not be processed. Please try again. [CAM-FRAME]", "Retry detector")
         composeRule.onNodeWithTag("retry_detector_button").assertExists()
     }
 

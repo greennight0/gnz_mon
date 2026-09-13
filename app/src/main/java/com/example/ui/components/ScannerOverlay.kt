@@ -84,6 +84,7 @@ import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
 import com.example.data.model.DetectorState
 import com.example.data.model.DetectorErrorType
+import com.example.data.model.DetectorStage
 import com.example.data.model.ScanState
 import com.example.ui.theme.AmberGlow
 import com.example.ui.theme.CyberCyan
@@ -99,6 +100,13 @@ private const val MIN_DRAWN_BOX_DP = 60f
 private const val MIN_TOUCH_TARGET_DP = 48f
 private const val MAX_VELOCITY_PADDING_DP = 24f
 internal const val FRAME_ERROR_DISPLAY_MILLIS = 1_000L
+
+internal fun detectorStageCode(stage: DetectorStage): String = when (stage) {
+    DetectorStage.IMAGE_TO_BITMAP -> "CAM-FRAME"
+    DetectorStage.MP_IMAGE_CREATION -> "MP-IMAGE"
+    DetectorStage.DETECTOR_DETECT -> "MP-DETECT"
+    DetectorStage.UNKNOWN -> "CAM-FRAME"
+}
 
 /** Converts detector coordinates to the exact pixel rectangle presented to the user. */
 internal fun displayedTrackedRect(
@@ -574,15 +582,18 @@ fun ScannerOverlay(
             val statusText = when (statusDetectorState) {
                 DetectorState.NotReady -> if (isVi) "Detector đang khởi động…" else "Detector is starting…"
                 DetectorState.NoObjects -> if (isVi) "Chưa phát hiện đối tượng. Hãy hướng camera vào sinh vật." else "No object detected. Point the camera at an organism."
-                is DetectorState.FrameError -> if (isVi) {
+                is DetectorState.FrameError -> (if (isVi) {
                     "Không thể xử lý khung hình này. Detector vẫn đang chạy."
-                } else "This frame could not be processed. Detection is still running."
-                is DetectorState.Error -> when (statusDetectorState.type) {
+                } else "This frame could not be processed. Detection is still running.") +
+                    " [${detectorStageCode(statusDetectorState.stage)}]"
+                is DetectorState.Error -> (when (statusDetectorState.type) {
                     DetectorErrorType.INVALID_MODEL -> if (isVi) "Model detector không hợp lệ hoặc bị thiếu." else "The detector model is invalid or missing."
                     DetectorErrorType.INCOMPATIBLE_RUNTIME -> if (isVi) "Runtime detector không tương thích với thiết bị/ABI." else "The detector runtime is incompatible with this device/ABI."
                     DetectorErrorType.FRAME_TEMPORARY -> if (isVi) "Không thể xử lý khung hình này. Vui lòng thử lại." else "This frame could not be processed. Please try again."
                     DetectorErrorType.UNKNOWN -> if (isVi) "Detector gặp lỗi không xác định." else "The detector encountered an unknown error."
-                }
+                }) + if (statusDetectorState.stage != DetectorStage.UNKNOWN ||
+                    statusDetectorState.type == DetectorErrorType.FRAME_TEMPORARY
+                ) " [${detectorStageCode(statusDetectorState.stage)}]" else ""
                 DetectorState.Tracking -> if (isVi) "Đang chờ mục tiêu ổn định…" else "Waiting for a stable target…"
             }
             Surface(
