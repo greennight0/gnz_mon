@@ -10,7 +10,6 @@ import com.example.data.model.AppThemeMode
 import com.example.data.model.SocialLink
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
-import com.example.data.model.TrackingAlgorithm
 import com.example.data.repository.SpeciesRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -35,10 +34,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _trackedObjects = MutableStateFlow<List<TrackedBoundingBox>>(getDefaultCandidateBoxes())
     val trackedObjects: StateFlow<List<TrackedBoundingBox>> = _trackedObjects.asStateFlow()
 
-    // Thuật toán phát hiện & theo dõi đối tượng thị giác máy tính: YOLOv8 + BYTETracker hoặc SSD + DeepSORT
-    private val _activeAlgorithm = MutableStateFlow(TrackingAlgorithm.YOLO_BYTE_TRACKER)
-    val activeAlgorithm: StateFlow<TrackingAlgorithm> = _activeAlgorithm.asStateFlow()
-
     // ID của Track đang được người dùng chọn/khóa (mặc định null: chưa có box nào được chọn)
     private val _selectedTrackId = MutableStateFlow<Int?>(null)
     val selectedTrackId: StateFlow<Int?> = _selectedTrackId.asStateFlow()
@@ -46,9 +41,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Đo kiểm hiệu năng AI Telemetry
     private val _inferenceLatencyMs = MutableStateFlow(16)
     val inferenceLatencyMs: StateFlow<Int> = _inferenceLatencyMs.asStateFlow()
-
-    private val _trackingFps = MutableStateFlow(30)
-    val trackingFps: StateFlow<Int> = _trackingFps.asStateFlow()
 
     // Species selected to view in the detailed Modal Sheet
     private val _selectedSpeciesForDetail = MutableStateFlow<SpeciesInfo?>(null)
@@ -243,18 +235,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun dismissSpeciesTag() {
         _detectedSpecies.value = null
-    }
-
-    fun setAlgorithm(algorithm: TrackingAlgorithm) {
-        _activeAlgorithm.value = algorithm
-    }
-
-    fun toggleAlgorithm() {
-        _activeAlgorithm.value = if (_activeAlgorithm.value == TrackingAlgorithm.YOLO_BYTE_TRACKER) {
-            TrackingAlgorithm.SSD_DEEP_SORT
-        } else {
-            TrackingAlgorithm.YOLO_BYTE_TRACKER
-        }
     }
 
     fun analyzeImage(bitmap: Bitmap) {

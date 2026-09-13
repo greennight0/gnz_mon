@@ -76,7 +76,6 @@ import com.example.data.model.AppLanguage
 import com.example.data.model.SpeciesCategory
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
-import com.example.data.model.TrackingAlgorithm
 import com.example.ui.theme.AmberGlow
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.LaserCyan
@@ -98,7 +97,6 @@ fun ScannerOverlay(
     language: AppLanguage,
     trackedObjects: List<TrackedBoundingBox> = emptyList(),
     selectedTrackId: Int? = null,
-    activeAlgorithm: TrackingAlgorithm = TrackingAlgorithm.YOLO_BYTE_TRACKER,
     onSelectTrack: (Int?) -> Unit = {},
     onSpeciesClick: (SpeciesInfo) -> Unit,
     onCaptureClick: () -> Unit,
@@ -254,7 +252,7 @@ fun ScannerOverlay(
                     drawLine(boxColor.copy(alpha = 0.8f), Offset(cx - ch, cy), Offset(cx + ch, cy), 1.5.dp.toPx())
                     drawLine(boxColor.copy(alpha = 0.8f), Offset(cx, cy - ch), Offset(cx, cy + ch), 1.5.dp.toPx())
 
-                    // 1.4 Vectơ vận tốc di chuyển (Kalman Motion Vector từ DeepSORT / BYTETracker)
+                    // 1.4 Vectơ vận tốc tâm được làm mượt bằng One Euro Filter
                     if (box.velocityX != 0f || box.velocityY != 0f) {
                         val vx = (box.velocityX * screenW * 0.15f).coerceIn(-40.dp.toPx(), 40.dp.toPx())
                         val vy = (box.velocityY * screenH * 0.15f).coerceIn(-40.dp.toPx(), 40.dp.toPx())
@@ -531,7 +529,7 @@ fun ScannerOverlay(
                         if (detectedSpecies == null) {
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = "• ${activeAlgorithm.trackerName.substringBefore(' ')}",
+                                text = "• Tracking",
                                 color = Color.White.copy(alpha = 0.75f),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Medium

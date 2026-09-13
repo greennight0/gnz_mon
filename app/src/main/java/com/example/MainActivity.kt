@@ -111,7 +111,6 @@ fun MysteriesOfNatureApp(
     val isSettingsOpen by viewModel.isSettingsOpen.collectAsState()
     val trackedObjects by viewModel.trackedObjects.collectAsState()
     val selectedTrackId by viewModel.selectedTrackId.collectAsState()
-    val activeAlgorithm by viewModel.activeAlgorithm.collectAsState()
     val recognitionError by viewModel.recognitionError.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -196,7 +195,6 @@ fun MysteriesOfNatureApp(
                     language = language,
                     trackedObjects = trackedObjects,
                     selectedTrackId = selectedTrackId,
-                    activeAlgorithm = activeAlgorithm,
                     onSelectTrack = { trackId -> viewModel.selectTrack(trackId) },
                     onSpeciesClick = { species ->
                         viewModel.openSpeciesDetail(species)
