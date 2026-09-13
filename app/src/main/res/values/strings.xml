@@ -1,5 +1,17 @@
 <resources>
     <string name="app_name">GNZ MON</string>
     <string name="app_tagline">Mysteries of nature</string>
+    <string name="sns_channels_icon">Social and community channels</string>
+    <string name="sns_title_en">Social &amp; Community Channels</string>
+    <string name="sns_title_vi">Kênh mạng xã hội &amp; SNS</string>
+    <string name="sns_subtitle_en">GNZ MON Ecosystem</string>
+    <string name="sns_subtitle_vi">Hệ sinh thái GNZ MON</string>
+    <string name="sns_description_en">Connect with our wildlife &amp; nature mystery exploration community:</string>
+    <string name="sns_description_vi">Kết nối cùng cộng đồng nghiên cứu &amp; khám phá bí ẩn tự nhiên:</string>
+    <string name="sns_open_en">Open</string>
+    <string name="sns_open_vi">Mở</string>
+    <string name="sns_close_en">Close</string>
+    <string name="sns_close_vi">Đóng</string>
+    <string name="sns_open_error_en">Unable to open link</string>
+    <string name="sns_open_error_vi">Không thể mở liên kết</string>
 </resources>
-

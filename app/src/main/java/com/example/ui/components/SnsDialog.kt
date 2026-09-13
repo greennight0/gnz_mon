@@ -36,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,16 +45,19 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.R
 import com.example.data.model.AppLanguage
 import com.example.data.model.SocialLink
 import com.example.ui.theme.CyberCyan
-import com.example.ui.theme.LaserCyan
-import com.example.ui.theme.NeonEmerald
 
 /**
  * SnsDialog: Hộp thoại hiển thị danh sách các mạng xã hội & kênh kết nối GNZ (SNS).
@@ -67,6 +71,8 @@ fun SnsDialog(
 ) {
     val isVi = language == AppLanguage.VIETNAMESE
     val context = LocalContext.current
+    val openLabel = stringResource(if (isVi) R.string.sns_open_vi else R.string.sns_open_en)
+    val openError = stringResource(if (isVi) R.string.sns_open_error_vi else R.string.sns_open_error_en)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -118,7 +124,7 @@ fun SnsDialog(
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Public,
-                                contentDescription = "SNS",
+                                contentDescription = stringResource(R.string.sns_channels_icon),
                                 tint = CyberCyan,
                                 modifier = Modifier.size(22.dp)
                             )
@@ -128,13 +134,13 @@ fun SnsDialog(
 
                         Column {
                             Text(
-                                text = if (isVi) "Kênh mạng xã hội & SNS" else "Social & Community Channels",
+                                text = stringResource(if (isVi) R.string.sns_title_vi else R.string.sns_title_en),
                                 color = Color.White,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Black
                             )
                             Text(
-                                text = if (isVi) "Hệ sinh thái GNZ MON" else "GNZ MON Ecosystem",
+                                text = stringResource(if (isVi) R.string.sns_subtitle_vi else R.string.sns_subtitle_en),
                                 color = CyberCyan,
                                 fontSize = 11.5.sp,
                                 fontWeight = FontWeight.SemiBold
@@ -153,7 +159,7 @@ fun SnsDialog(
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Close,
-                            contentDescription = "Close",
+                            contentDescription = stringResource(if (isVi) R.string.sns_close_vi else R.string.sns_close_en),
                             tint = Color.White,
                             modifier = Modifier.size(18.dp)
                         )
@@ -163,13 +169,10 @@ fun SnsDialog(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = if (isVi)
-                        "Kết nối cùng cộng đồng nghiên cứu & khám phá bí ẩn tự nhiên:"
-                    else
-                        "Connect with our wildlife & nature mystery exploration community:",
-                    color = Color(0xFFB0C8E2),
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp
+                    text = stringResource(if (isVi) R.string.sns_description_vi else R.string.sns_description_en),
+                    color = Color(0xFFD3E2F2),
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -184,7 +187,8 @@ fun SnsDialog(
                     items(socialLinks, key = { it.id }) { link ->
                         SnsLinkCard(
                             link = link,
-                            onOpen = { openUrl(context, link.url) }
+                            openLabel = openLabel,
+                            onOpen = { openUrl(context, link.url, openError) }
                         )
                     }
                 }
@@ -202,7 +206,7 @@ fun SnsDialog(
                         .testTag("dismiss_sns_dialog_button")
                 ) {
                     Text(
-                        text = if (isVi) "Đóng" else "Close",
+                        text = stringResource(if (isVi) R.string.sns_close_vi else R.string.sns_close_en),
                         color = Color(0xFF001F3F),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
@@ -216,6 +220,7 @@ fun SnsDialog(
 @Composable
 fun SnsLinkCard(
     link: SocialLink,
+    openLabel: String,
     onOpen: () -> Unit
 ) {
     val (iconEmoji, accentColor) = when (link.id) {
@@ -235,99 +240,90 @@ fun SnsLinkCard(
         border = BorderStroke(1.dp, Color(0x334A90E2)),
         modifier = Modifier
             .fillMaxWidth()
+            .minimumInteractiveComponentSize()
+            .semantics(mergeDescendants = true) {
+                contentDescription = "${link.name}, $openLabel"
+            }
             .clickable(onClick = onOpen)
             .testTag("sns_item_${link.id}")
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.Top
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(accentColor.copy(alpha = 0.18f))
-                        .border(1.dp, accentColor.copy(alpha = 0.5f), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = iconEmoji,
-                        fontSize = 16.sp
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(10.dp))
-
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = link.name,
-                            color = Color.White,
-                            fontSize = 13.5.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = CyberCyan.copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                text = link.category,
-                                color = LaserCyan,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = link.handle,
-                        color = Color(0xFF88A8CD),
-                        fontSize = 11.5.sp
-                    )
-                }
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+            Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0x2200E5FF))
-                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(accentColor.copy(alpha = 0.18f))
+                    .border(1.dp, accentColor.copy(alpha = 0.5f), CircleShape),
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "Mở",
-                    color = CyberCyan,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                    contentDescription = null,
-                    tint = CyberCyan,
-                    modifier = Modifier.size(13.dp)
-                )
+                Text(text = iconEmoji, fontSize = 18.sp)
             }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = link.name,
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    lineHeight = 21.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("sns_name_${link.id}")
+                )
+                Text(
+                    text = link.handle,
+                    color = Color(0xFFC2D5E9),
+                    fontSize = 14.sp,
+                    lineHeight = 19.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("sns_handle_${link.id}")
+                )
+                Spacer(modifier = Modifier.height(7.dp))
+                Surface(shape = RoundedCornerShape(5.dp), color = CyberCyan.copy(alpha = 0.18f)) {
+                    Text(
+                        text = link.category,
+                        color = Color(0xFF8FEAFF),
+                        fontSize = 13.sp,
+                        lineHeight = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                            .testTag("sns_category_${link.id}")
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                contentDescription = openLabel,
+                tint = CyberCyan,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .padding(13.dp)
+                    .size(20.dp)
+            )
         }
     }
 }
 
-private fun openUrl(context: Context, url: String) {
+private fun openUrl(context: Context, url: String, errorMessage: String) {
     try {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
         context.startActivity(intent)
     } catch (e: Exception) {
-        Toast.makeText(context, "Không thể mở liên kết: $url", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "$errorMessage: $url", Toast.LENGTH_SHORT).show()
     }
 }
