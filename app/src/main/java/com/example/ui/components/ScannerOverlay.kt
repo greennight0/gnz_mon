@@ -45,8 +45,12 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,6 +90,7 @@ import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.LaserCyan
 import com.example.ui.theme.MysticBlue50
 import com.example.ui.theme.NeonEmerald
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -93,6 +98,7 @@ private const val TOUCH_PADDING_DP = 20f
 private const val MIN_DRAWN_BOX_DP = 60f
 private const val MIN_TOUCH_TARGET_DP = 48f
 private const val MAX_VELOCITY_PADDING_DP = 24f
+internal const val FRAME_ERROR_DISPLAY_MILLIS = 1_000L
 
 /** Converts detector coordinates to the exact pixel rectangle presented to the user. */
 internal fun displayedTrackedRect(
@@ -226,6 +232,18 @@ fun ScannerOverlay(
     val currentTrackedObjects by rememberUpdatedState(displayedTrackedObjects)
     val currentSelectedTrackId by rememberUpdatedState(selectedTrackId)
     val currentOnSelectTrack by rememberUpdatedState(onSelectTrack)
+    var displayedDetectorState by remember { mutableStateOf(detectorState) }
+    LaunchedEffect(detectorState) {
+        if (displayedDetectorState is DetectorState.FrameError &&
+            detectorState !is DetectorState.FrameError &&
+            detectorState !is DetectorState.Error
+        ) {
+            // Keep a recovered one-frame warning visible just long enough to be readable. A
+            // blocking error cancels this delay and becomes actionable immediately.
+            delay(FRAME_ERROR_DISPLAY_MILLIS)
+        }
+        displayedDetectorState = detectorState
+    }
     // Pulse transition for tracking breathing animation
     val infiniteTransition = rememberInfiniteTransition(label = "tracking_pulse")
     val pulseGlow by infiniteTransition.animateFloat(
@@ -552,13 +570,14 @@ fun ScannerOverlay(
                 }
             }
         } else {
-            val statusText = when (detectorState) {
+            val statusDetectorState = displayedDetectorState
+            val statusText = when (statusDetectorState) {
                 DetectorState.NotReady -> if (isVi) "Detector đang khởi động…" else "Detector is starting…"
                 DetectorState.NoObjects -> if (isVi) "Chưa phát hiện đối tượng. Hãy hướng camera vào sinh vật." else "No object detected. Point the camera at an organism."
                 is DetectorState.FrameError -> if (isVi) {
                     "Không thể xử lý khung hình này. Detector vẫn đang chạy."
                 } else "This frame could not be processed. Detection is still running."
-                is DetectorState.Error -> when (detectorState.type) {
+                is DetectorState.Error -> when (statusDetectorState.type) {
                     DetectorErrorType.INVALID_MODEL -> if (isVi) "Model detector không hợp lệ hoặc bị thiếu." else "The detector model is invalid or missing."
                     DetectorErrorType.INCOMPATIBLE_RUNTIME -> if (isVi) "Runtime detector không tương thích với thiết bị/ABI." else "The detector runtime is incompatible with this device/ABI."
                     DetectorErrorType.FRAME_TEMPORARY -> if (isVi) "Không thể xử lý khung hình này. Vui lòng thử lại." else "This frame could not be processed. Please try again."
@@ -579,9 +598,9 @@ fun ScannerOverlay(
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(statusText, color = if (detectorState is DetectorState.Error) AmberGlow else LaserCyan,
+                    Text(statusText, color = if (statusDetectorState is DetectorState.Error) AmberGlow else LaserCyan,
                         fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    if (detectorState is DetectorState.Error) {
+                    if (statusDetectorState is DetectorState.Error) {
                         Spacer(Modifier.height(8.dp))
                         Surface(
                             modifier = Modifier.clickable(onClick = onRetryDetector).testTag("retry_detector_button"),

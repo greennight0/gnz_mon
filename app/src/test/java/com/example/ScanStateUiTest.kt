@@ -3,6 +3,9 @@ package com.example
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.RectF
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertTextEquals
@@ -17,6 +20,7 @@ import com.example.data.model.ScanState
 import com.example.ui.MainViewModel
 import com.example.ui.ScanRequest
 import com.example.ui.components.ScannerOverlay
+import com.example.ui.components.FRAME_ERROR_DISPLAY_MILLIS
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
@@ -102,11 +106,45 @@ class ScanStateUiTest {
         composeRule.onNodeWithTag("retry_detector_button").assertExists()
     }
 
-    @Test fun `temporary frame error does not offer detector retry`() {
-        setDetectorState(DetectorState.FrameError(IllegalArgumentException("frame bytes")))
+    @Test fun `single temporary frame error remains briefly after next successful frame without retry`() {
+        composeRule.mainClock.autoAdvance = false
+        var state by mutableStateOf<DetectorState>(
+            DetectorState.FrameError(IllegalArgumentException("frame bytes"))
+        )
+        composeRule.setContent {
+            ScannerOverlay(
+                detectedSpecies = null,
+                isAnalyzing = false,
+                detectorState = state,
+                language = AppLanguage.ENGLISH,
+                onSpeciesClick = {},
+                onCaptureClick = {}
+            )
+        }
         composeRule.onNodeWithTag("detector_status_guidance")
             .assertTextEquals("This frame could not be processed. Detection is still running.")
         composeRule.onNodeWithTag("retry_detector_button").assertDoesNotExist()
+
+        state = DetectorState.NoObjects
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.mainClock.advanceTimeBy(FRAME_ERROR_DISPLAY_MILLIS - 1)
+        composeRule.onNodeWithTag("detector_status_guidance")
+            .assertTextEquals("This frame could not be processed. Detection is still running.")
+        composeRule.mainClock.advanceTimeBy(1)
+        composeRule.onNodeWithTag("detector_status_guidance")
+            .assertTextEquals("No object detected. Point the camera at an organism.")
+    }
+
+    @Test fun `prolonged frame error offers retry after threshold`() {
+        setDetectorState(
+            DetectorState.Error(
+                IllegalArgumentException("repeated frame bytes"),
+                DetectorErrorType.FRAME_TEMPORARY
+            )
+        )
+        composeRule.onNodeWithTag("detector_status_guidance")
+            .assertTextEquals("This frame could not be processed. Please try again.", "Retry detector")
+        composeRule.onNodeWithTag("retry_detector_button").assertExists()
     }
 
     private fun setDetectorState(state: DetectorState) {
