@@ -13,6 +13,7 @@ import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
 import com.example.data.model.DetectorState
+import com.example.data.model.DetectorErrorType
 import com.example.data.model.ScanException
 import com.example.data.model.ScanFailureReason
 import com.example.data.model.ScanState
@@ -29,6 +30,9 @@ import org.json.JSONException
 import java.io.IOException
 import java.net.SocketTimeoutException
 import kotlin.math.sqrt
+import com.example.ui.camera.IncompatibleDetectorRuntimeException
+import com.example.ui.camera.PermanentDetectorException
+import com.example.ui.camera.RecoverableDetectorInitializationException
 
 data class ScanRequest(
     val trackId: Int,
@@ -173,11 +177,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onDetectorError(error: Throwable) {
-        _detectorState.value = DetectorState.Error(error)
+        val type = classifyDetectorError(error)
+        if (type == DetectorErrorType.FRAME_TEMPORARY) {
+            // A malformed frame is already closed by the analyzer. Keep detection running and
+            // avoid presenting a blocking retry flow for an issue the next frame can resolve.
+            _detectorState.value = DetectorState.FrameError(error, type)
+            return
+        }
+        _detectorState.value = DetectorState.Error(error, type)
         _trackedObjects.value = emptyList()
         _selectedTrackId.value = null
         lockedTargetRect = null
         missedLockedTargetFrames = 0
+    }
+
+    private fun classifyDetectorError(error: Throwable): DetectorErrorType {
+        val chain = generateSequence(error) { it.cause }.toList()
+        return when {
+            chain.any { it is IncompatibleDetectorRuntimeException || it is LinkageError } ->
+                DetectorErrorType.INCOMPATIBLE_RUNTIME
+            chain.any { it is RecoverableDetectorInitializationException } ->
+                DetectorErrorType.INVALID_MODEL
+            chain.any { it is PermanentDetectorException } -> DetectorErrorType.UNKNOWN
+            else -> DetectorErrorType.FRAME_TEMPORARY
+        }
     }
 
 

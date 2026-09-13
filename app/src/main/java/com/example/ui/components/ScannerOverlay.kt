@@ -79,6 +79,7 @@ import com.example.data.model.SpeciesCategory
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
 import com.example.data.model.DetectorState
+import com.example.data.model.DetectorErrorType
 import com.example.data.model.ScanState
 import com.example.ui.theme.AmberGlow
 import com.example.ui.theme.CyberCyan
@@ -554,7 +555,15 @@ fun ScannerOverlay(
             val statusText = when (detectorState) {
                 DetectorState.NotReady -> if (isVi) "Detector đang khởi động…" else "Detector is starting…"
                 DetectorState.NoObjects -> if (isVi) "Chưa phát hiện đối tượng. Hãy hướng camera vào sinh vật." else "No object detected. Point the camera at an organism."
-                is DetectorState.Error -> if (isVi) "Detector gặp lỗi." else "Detector error."
+                is DetectorState.FrameError -> if (isVi) {
+                    "Không thể xử lý khung hình này. Detector vẫn đang chạy."
+                } else "This frame could not be processed. Detection is still running."
+                is DetectorState.Error -> when (detectorState.type) {
+                    DetectorErrorType.INVALID_MODEL -> if (isVi) "Model detector không hợp lệ hoặc bị thiếu." else "The detector model is invalid or missing."
+                    DetectorErrorType.INCOMPATIBLE_RUNTIME -> if (isVi) "Runtime detector không tương thích với thiết bị/ABI." else "The detector runtime is incompatible with this device/ABI."
+                    DetectorErrorType.FRAME_TEMPORARY -> if (isVi) "Không thể xử lý khung hình này. Vui lòng thử lại." else "This frame could not be processed. Please try again."
+                    DetectorErrorType.UNKNOWN -> if (isVi) "Detector gặp lỗi không xác định." else "The detector encountered an unknown error."
+                }
                 DetectorState.Tracking -> if (isVi) "Đang chờ mục tiêu ổn định…" else "Waiting for a stable target…"
             }
             Surface(
