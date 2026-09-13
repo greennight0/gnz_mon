@@ -34,6 +34,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -42,7 +44,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,12 +65,10 @@ import com.example.ui.components.ScannerOverlay
 import com.example.ui.components.SnsDialog
 import com.example.ui.components.SpeciesDetailSheet
 import com.example.ui.theme.CyberCyan
-import com.example.ui.theme.LaserCyan
 import com.example.ui.theme.MyApplicationTheme
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -101,8 +100,6 @@ fun MysteriesOfNatureApp(
     isDarkTheme: Boolean
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
     val detectedSpecies by viewModel.detectedSpecies.collectAsState()
     val selectedSpeciesDetail by viewModel.selectedSpeciesForDetail.collectAsState()
     val isAnalyzing by viewModel.isAnalyzing.collectAsState()
@@ -116,6 +113,8 @@ fun MysteriesOfNatureApp(
     val selectedTrackId by viewModel.selectedTrackId.collectAsState()
     val activeAlgorithm by viewModel.activeAlgorithm.collectAsState()
     val inferenceLatencyMs by viewModel.inferenceLatencyMs.collectAsState()
+    val recognitionError by viewModel.recognitionError.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     var cameraController: CameraController? by remember { mutableStateOf(null) }
 
@@ -128,23 +127,42 @@ fun MysteriesOfNatureApp(
     ) { uri: Uri? ->
         uri?.let { imageUri ->
             try {
-                context.contentResolver.openInputStream(imageUri)?.use { inputStream ->
-                    val bitmap = BitmapFactory.decodeStream(inputStream)
-                    bitmap?.let { viewModel.analyzeImage(it) }
+                val inputStream = context.contentResolver.openInputStream(imageUri)
+                if (inputStream != null) {
+                    inputStream.use {
+                        val bitmap = BitmapFactory.decodeStream(inputStream)
+                        if (bitmap != null) viewModel.analyzeImage(bitmap)
+                        else viewModel.reportRecognitionError()
+                    }
+                } else {
+                    viewModel.reportRecognitionError()
                 }
             } catch (e: Exception) {
-                viewModel.triggerDemoSampleScan()
+                viewModel.reportRecognitionError(e)
             }
         }
     }
 
     var isSnsOpen by remember { mutableStateOf(false) }
 
+    LaunchedEffect(recognitionError, language) {
+        if (recognitionError != null) {
+            snackbarHostState.showSnackbar(
+                if (language == AppLanguage.VIETNAMESE)
+                    "Không thể đọc hoặc nhận diện ảnh. Vui lòng thử lại."
+                else
+                    "The image could not be read or identified. Please try again."
+            )
+            viewModel.clearRecognitionError()
+        }
+    }
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
             .testTag("main_scaffold"),
-        containerColor = Color.Black
+        containerColor = Color.Black,
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
         Box(
             modifier = Modifier
@@ -163,17 +181,14 @@ fun MysteriesOfNatureApp(
                     onImageCaptured = { bitmap ->
                         viewModel.analyzeImage(bitmap)
                     },
-                    onError = {
-                        // Keep viewfinder alive and provide fallback scan
-                    }
+                    onError = { viewModel.reportRecognitionError(it) }
                 )
             }
 
             CameraPermissionContent(
                 isCameraPermissionGranted = cameraPermissionState.status.isGranted,
                 language = language,
-                onRequestPermission = cameraPermissionState::launchPermissionRequest,
-                onTryDemo = viewModel::triggerDemoSampleScan
+                onRequestPermission = cameraPermissionState::launchPermissionRequest
             ) {
                 // High-Tech Scanner HUD Overlay (Khung nhận diện & Khung theo dõi đối tượng / Bounding Box & Object Tracking Box)
                 ScannerOverlay(
@@ -198,8 +213,7 @@ fun MysteriesOfNatureApp(
                                 cameraController?.takePhoto()
                             }
                         } else {
-                            // Smart instant species recognition
-                            viewModel.triggerDemoSampleScan()
+                            cameraPermissionState.launchPermissionRequest()
                         }
                     },
                     onRescanTarget = {
@@ -212,7 +226,7 @@ fun MysteriesOfNatureApp(
                                 cameraController?.takePhoto()
                             }
                         } else {
-                            viewModel.triggerDemoSampleScan()
+                            cameraPermissionState.launchPermissionRequest()
                         }
                     },
                     onTapCreateOrMoveTarget = { normX, normY ->
@@ -264,7 +278,6 @@ fun CameraPermissionContent(
     isCameraPermissionGranted: Boolean,
     language: AppLanguage,
     onRequestPermission: () -> Unit,
-    onTryDemo: () -> Unit,
     scannerOverlay: @Composable () -> Unit
 ) {
     if (isCameraPermissionGranted) {
@@ -272,8 +285,7 @@ fun CameraPermissionContent(
     } else {
         CameraPermissionFallbackView(
             language = language,
-            onRequestPermission = onRequestPermission,
-            onTryDemo = onTryDemo
+            onRequestPermission = onRequestPermission
         )
     }
 }
@@ -281,8 +293,7 @@ fun CameraPermissionContent(
 @Composable
 fun CameraPermissionFallbackView(
     language: AppLanguage,
-    onRequestPermission: () -> Unit,
-    onTryDemo: () -> Unit
+    onRequestPermission: () -> Unit
 ) {
     val isVi = language == AppLanguage.VIETNAMESE
 
@@ -365,26 +376,6 @@ fun CameraPermissionFallbackView(
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
-                onClick = onTryDemo,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0x3300E5FF),
-                    contentColor = LaserCyan
-                ),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("demo_without_camera_button")
-            ) {
-                Text(
-                    text = if (isVi) "Thử nghiệm mẫu sinh vật" else "Try Sample Organism Scan",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp
-                )
-            }
         }
     }
 }
