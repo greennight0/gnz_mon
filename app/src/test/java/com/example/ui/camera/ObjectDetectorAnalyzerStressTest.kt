@@ -18,9 +18,10 @@ import java.lang.reflect.Proxy
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class ObjectDetectorAnalyzerStressTest {
-    @Test fun `failed frame emits only error and remains non blocking`() {
+    @Test fun `single failed frame emits telemetry but no ui warning and remains non blocking`() {
         val failure = IllegalArgumentException("bad frame")
         val callbacks = mutableListOf<String>()
+        val telemetry = mutableListOf<Exception>()
         val viewModel = MainViewModel(ApplicationProvider.getApplicationContext())
         val analyzer = ObjectDetectorAnalyzer(
             engine = ObjectDetectorEngine { throw failure },
@@ -29,17 +30,15 @@ class ObjectDetectorAnalyzerStressTest {
                 viewModel.onObjectsTracked(boxes, 1)
             },
             onDetectionError = { error -> callbacks += "error"; viewModel.onDetectorError(error) },
+            onDetectionTelemetry = { error, _, _ -> telemetry += error },
             minimumInferenceIntervalMs = 0
         )
 
         analyzer.analyze(imageProxy(0) {})
 
-        assertEquals(listOf("error"), callbacks)
-        assertTrue(viewModel.detectorState.value is DetectorState.FrameError)
-        assertEquals(
-            DetectorStage.UNKNOWN,
-            (viewModel.detectorState.value as DetectorState.FrameError).stage
-        )
+        assertEquals(emptyList<String>(), callbacks)
+        assertEquals(listOf(failure), telemetry)
+        assertTrue(viewModel.detectorState.value !is DetectorState.FrameError)
     }
 
     @Test fun `view model preserves every detector stage in frame errors`() {
@@ -91,8 +90,7 @@ class ObjectDetectorAnalyzerStressTest {
 
         assertEquals(2, attempts)
         assertEquals(2, closes)
-        assertEquals(1, errors.size)
-        assertTrue(errors.single() !is PermanentDetectorException)
+        assertTrue(errors.isEmpty())
         assertEquals(0, analyzer.consecutiveFrameFailures)
     }
 
@@ -152,7 +150,7 @@ class ObjectDetectorAnalyzerStressTest {
         )
 
         analyzer.analyze(imageProxy(0) {})
-        assertTrue(viewModel.detectorState.value is DetectorState.FrameError)
+        assertTrue(viewModel.detectorState.value !is DetectorState.FrameError)
         analyzer.analyze(imageProxy(0) {})
         assertTrue(viewModel.detectorState.value is DetectorState.FrameError)
         analyzer.analyze(imageProxy(0) {})
@@ -160,8 +158,30 @@ class ObjectDetectorAnalyzerStressTest {
         assertEquals(DetectorStage.UNKNOWN, error.stage)
     }
 
+    @Test fun `significant failure rate warns without consecutive failures`() {
+        var attempts = 0
+        val uiErrors = mutableListOf<Exception>()
+        val analyzer = ObjectDetectorAnalyzer(
+            engine = ObjectDetectorEngine {
+                attempts++
+                if (attempts % 2 == 1) throw IllegalArgumentException("bad frame")
+                emptyList()
+            },
+            onObjectsTracked = { _, _, _ -> },
+            onDetectionError = uiErrors::add,
+            minimumInferenceIntervalMs = 0
+        )
+
+        repeat(5) { analyzer.analyze(imageProxy(0) {}) }
+
+        assertEquals(1, uiErrors.size)
+        assertTrue(uiErrors.single() !is PermanentDetectorException)
+        assertEquals(1, analyzer.consecutiveFrameFailures)
+    }
+
     @Test fun `successful inference resets consecutive frame failure count`() {
         var attempts = 0
+        val uiErrors = mutableListOf<Exception>()
         val analyzer = ObjectDetectorAnalyzer(
             engine = ObjectDetectorEngine {
                 attempts++
@@ -169,15 +189,18 @@ class ObjectDetectorAnalyzerStressTest {
                 emptyList()
             },
             onObjectsTracked = { _, _, _ -> },
+            onDetectionError = uiErrors::add,
             minimumInferenceIntervalMs = 0
         )
 
         analyzer.analyze(imageProxy(0) {})
         assertEquals(1, analyzer.consecutiveFrameFailures)
+        assertTrue(uiErrors.isEmpty())
         analyzer.analyze(imageProxy(0) {})
         assertEquals(0, analyzer.consecutiveFrameFailures)
         analyzer.analyze(imageProxy(0) {})
         assertEquals(1, analyzer.consecutiveFrameFailures)
+        assertTrue(uiErrors.isEmpty())
     }
     @Test fun `continuous rotated frames keep heap bounded and every proxy is closed`() {
         val rotations = intArrayOf(0, 90, 270)
