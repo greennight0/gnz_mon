@@ -339,7 +339,12 @@ private fun localizedScanError(
         ScanFailureReason.Network -> if (vi) R.string.scan_error_network_vi else R.string.scan_error_network_en
         ScanFailureReason.Timeout -> if (vi) R.string.scan_error_timeout_vi else R.string.scan_error_timeout_en
         ScanFailureReason.EmptyResponse -> if (vi) R.string.scan_error_empty_vi else R.string.scan_error_empty_en
-        ScanFailureReason.InvalidResponse, null -> if (vi) R.string.scan_error_invalid_vi else R.string.scan_error_invalid_en
+        ScanFailureReason.InvalidResponse, ScanFailureReason.MalformedJson,
+        ScanFailureReason.TruncatedResponse, ScanFailureReason.SafetyBlocked,
+        ScanFailureReason.NoCandidates, ScanFailureReason.MissingContent,
+        is ScanFailureReason.MissingRequiredField, is ScanFailureReason.UnknownCategory,
+        is ScanFailureReason.InconsistentTaxonomy, null ->
+            if (vi) R.string.scan_error_invalid_vi else R.string.scan_error_invalid_en
         ScanFailureReason.Unexpected -> if (vi) R.string.scan_error_invalid_vi else R.string.scan_error_invalid_en
         is ScanFailureReason.LowConfidence -> if (vi) R.string.scan_error_confidence_vi else R.string.scan_error_confidence_en
         is ScanFailureReason.Http -> if (vi) R.string.scan_error_http_vi else R.string.scan_error_http_en
