@@ -50,9 +50,10 @@ class ObjectDetectorAnalyzerStressTest {
         assertEquals(3, closes)
     }
 
-    @Test fun `recoverable frame failure does not pause subsequent inference`() {
+    @Test fun `single frame failure recovers on next frame and closes both proxies`() {
         var attempts = 0
         var closes = 0
+        val errors = mutableListOf<Exception>()
         val analyzer = ObjectDetectorAnalyzer(
             engine = ObjectDetectorEngine {
                 attempts++
@@ -60,6 +61,7 @@ class ObjectDetectorAnalyzerStressTest {
                 emptyList()
             },
             onObjectsTracked = { _, _, _ -> },
+            onDetectionError = errors::add,
             minimumInferenceIntervalMs = 0
         )
 
@@ -67,6 +69,49 @@ class ObjectDetectorAnalyzerStressTest {
 
         assertEquals(2, attempts)
         assertEquals(2, closes)
+        assertEquals(1, errors.size)
+        assertTrue(errors.single() !is PermanentDetectorException)
+        assertEquals(0, analyzer.consecutiveFrameFailures)
+    }
+
+    @Test fun `consecutive failures emit one recreation request and close every proxy`() {
+        var attempts = 0
+        var closes = 0
+        var recreationRequests = 0
+        val analyzer = ObjectDetectorAnalyzer(
+            engine = ObjectDetectorEngine {
+                attempts++
+                throw IllegalArgumentException("bad frame")
+            },
+            onObjectsTracked = { _, _, _ -> },
+            onDetectionError = { if (it is PermanentDetectorException) recreationRequests++ },
+            consecutiveFailureThreshold = 3,
+            minimumInferenceIntervalMs = 0
+        )
+
+        repeat(8) { analyzer.analyze(imageProxy(0) { closes++ }) }
+
+        assertEquals(3, attempts)
+        assertEquals(1, recreationRequests)
+        assertEquals(8, closes)
+    }
+
+    @Test fun `failure threshold becomes actionable view model error`() {
+        val viewModel = MainViewModel(ApplicationProvider.getApplicationContext())
+        val analyzer = ObjectDetectorAnalyzer(
+            engine = ObjectDetectorEngine { throw IllegalArgumentException("bad frame") },
+            onObjectsTracked = { _, _, _ -> },
+            onDetectionError = viewModel::onDetectorError,
+            consecutiveFailureThreshold = 3,
+            minimumInferenceIntervalMs = 0
+        )
+
+        analyzer.analyze(imageProxy(0) {})
+        assertTrue(viewModel.detectorState.value is DetectorState.FrameError)
+        analyzer.analyze(imageProxy(0) {})
+        assertTrue(viewModel.detectorState.value is DetectorState.FrameError)
+        analyzer.analyze(imageProxy(0) {})
+        assertTrue(viewModel.detectorState.value is DetectorState.Error)
     }
 
     @Test fun `successful inference resets consecutive frame failure count`() {
