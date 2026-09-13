@@ -3,6 +3,9 @@ package com.example.ui.camera
 import android.os.Debug
 import androidx.camera.core.ImageInfo
 import androidx.camera.core.ImageProxy
+import androidx.test.core.app.ApplicationProvider
+import com.example.data.model.DetectorState
+import com.example.ui.MainViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,6 +17,36 @@ import java.lang.reflect.Proxy
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class ObjectDetectorAnalyzerStressTest {
+    @Test fun `failed frame emits only error and cannot overwrite error state`() {
+        val failure = IllegalArgumentException("bad frame")
+        val callbacks = mutableListOf<String>()
+        val viewModel = MainViewModel(ApplicationProvider.getApplicationContext())
+        val analyzer = ObjectDetectorAnalyzer(
+            engine = ObjectDetectorEngine { throw failure },
+            onObjectsTracked = { boxes, _, _ ->
+                callbacks += "objects:${boxes.size}"
+                viewModel.onObjectsTracked(boxes, 1)
+            },
+            onDetectionError = { error -> callbacks += "error"; viewModel.onDetectorError(error) },
+            minimumInferenceIntervalMs = 0
+        )
+
+        analyzer.analyze(imageProxy(0) {})
+
+        assertEquals(listOf("error"), callbacks)
+        assertTrue(viewModel.detectorState.value is DetectorState.Error)
+    }
+
+    @Test fun `permanent detector failure pauses subsequent inference`() {
+        var attempts = 0
+        val analyzer = ObjectDetectorAnalyzer(
+            engine = ObjectDetectorEngine { attempts++; throw PermanentDetectorException("dead") },
+            onObjectsTracked = { _, _, _ -> },
+            minimumInferenceIntervalMs = 0
+        )
+        repeat(3) { analyzer.analyze(imageProxy(0) {}) }
+        assertEquals(1, attempts)
+    }
     @Test fun `continuous rotated frames keep heap bounded and every proxy is closed`() {
         val rotations = intArrayOf(0, 90, 270)
         val seenRotations = mutableListOf<Int>()

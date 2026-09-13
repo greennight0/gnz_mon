@@ -128,6 +128,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onObjectsTracked(boxes: List<TrackedBoundingBox>, latency: Int) {
+        // Late callbacks already queued by CameraX must never erase the actionable error. Only a
+        // successfully constructed replacement detector may clear it via onDetectorReady().
+        if (_detectorState.value is DetectorState.Error) return
         _inferenceLatencyMs.value = latency.coerceAtLeast(10)
         _detectorState.value = if (boxes.isEmpty()) DetectorState.NoObjects else DetectorState.Tracking
         val currentSelectedId = _selectedTrackId.value
@@ -175,6 +178,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedTrackId.value = null
         lockedTargetRect = null
         missedLockedTargetFrames = 0
+    }
+
+
+    fun onDetectorReady() {
+        if (_detectorState.value is DetectorState.Error) {
+            _detectorState.value = DetectorState.NotReady
+        }
     }
 
     /**
