@@ -39,13 +39,54 @@ class ObjectDetectorAnalyzerStressTest {
 
     @Test fun `permanent detector failure pauses subsequent inference`() {
         var attempts = 0
+        var closes = 0
         val analyzer = ObjectDetectorAnalyzer(
             engine = ObjectDetectorEngine { attempts++; throw PermanentDetectorException("dead") },
             onObjectsTracked = { _, _, _ -> },
             minimumInferenceIntervalMs = 0
         )
-        repeat(3) { analyzer.analyze(imageProxy(0) {}) }
+        repeat(3) { analyzer.analyze(imageProxy(0) { closes++ }) }
         assertEquals(1, attempts)
+        assertEquals(3, closes)
+    }
+
+    @Test fun `recoverable frame failure does not pause subsequent inference`() {
+        var attempts = 0
+        var closes = 0
+        val analyzer = ObjectDetectorAnalyzer(
+            engine = ObjectDetectorEngine {
+                attempts++
+                if (attempts == 1) throw IllegalArgumentException("invalid frame pixels")
+                emptyList()
+            },
+            onObjectsTracked = { _, _, _ -> },
+            minimumInferenceIntervalMs = 0
+        )
+
+        repeat(2) { analyzer.analyze(imageProxy(0) { closes++ }) }
+
+        assertEquals(2, attempts)
+        assertEquals(2, closes)
+    }
+
+    @Test fun `successful inference resets consecutive frame failure count`() {
+        var attempts = 0
+        val analyzer = ObjectDetectorAnalyzer(
+            engine = ObjectDetectorEngine {
+                attempts++
+                if (attempts != 2) throw IllegalArgumentException("bad frame $attempts")
+                emptyList()
+            },
+            onObjectsTracked = { _, _, _ -> },
+            minimumInferenceIntervalMs = 0
+        )
+
+        analyzer.analyze(imageProxy(0) {})
+        assertEquals(1, analyzer.consecutiveFrameFailures)
+        analyzer.analyze(imageProxy(0) {})
+        assertEquals(0, analyzer.consecutiveFrameFailures)
+        analyzer.analyze(imageProxy(0) {})
+        assertEquals(1, analyzer.consecutiveFrameFailures)
     }
     @Test fun `continuous rotated frames keep heap bounded and every proxy is closed`() {
         val rotations = intArrayOf(0, 90, 270)
