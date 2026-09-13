@@ -32,7 +32,7 @@ workflows:
           set -euo pipefail
           : "${GRADLE_BIN:?GRADLE_BIN was not restored from the bootstrap step}"
           test -x "$GRADLE_BIN"
-          "$GRADLE_BIN" :app:assembleDebug --no-daemon --stacktrace
+          "$GRADLE_BIN" :app:compileDebugKotlin --no-daemon --stacktrace --info
       - name: Build Android Release APK (Optional)
         script: |
           set -euo pipefail
