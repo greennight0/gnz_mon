@@ -67,6 +67,10 @@ class EfficientDetLiteEngine private constructor(
                     detector.detect(mpImage)
                 } catch (error: Exception) {
                     throw PermanentDetectorException("Object detector runtime failed", error)
+                } catch (error: LinkageError) {
+                    // An ABI/JNI mismatch is permanent for this process. Do not catch Error as a
+                    // whole: OutOfMemoryError must not be converted into a recoverable frame error.
+                    throw PermanentDetectorException("Incompatible detector runtime or ABI", error)
                 }
             }
             return tracker.update(
@@ -182,7 +186,20 @@ internal fun createDetectorEngine(
     factory: () -> ObjectDetectorEngine
 ): ObjectDetectorEngine =
     try { factory() }
-    catch (error: Exception) { onError(error); DisabledObjectDetectorEngine }
+    catch (error: Exception) {
+        onError(RecoverableDetectorInitializationException("Detector initialization failed", error))
+        DisabledObjectDetectorEngine
+    }
+    catch (error: LinkageError) {
+        // Deliberately do not catch Error broadly: in particular, OOM must retain platform
+        // semantics. Linkage failures are classified so Crashlytics can distinguish an ABI or
+        // incompatible MediaPipe runtime from corrupt/missing model data.
+        onError(IncompatibleDetectorRuntimeException("Incompatible detector runtime or ABI", error))
+        DisabledObjectDetectorEngine
+    }
+
+class RecoverableDetectorInitializationException(message: String, cause: Throwable) : Exception(message, cause)
+class IncompatibleDetectorRuntimeException(message: String, cause: LinkageError) : Exception(message, cause)
 
 internal object DisabledObjectDetectorEngine : ObjectDetectorEngine {
     override fun detect(image: ImageProxy) = emptyList<TrackedBoundingBox>()

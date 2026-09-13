@@ -37,6 +37,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.model.TrackedBoundingBox
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 enum class TargetImageSource { PREVIEW_VIEW, IMAGE_CAPTURE }
 
@@ -77,10 +82,24 @@ class CameraController(
 ) {
     var imageCapture: ImageCapture? = null
     var camera: Camera? = null
-    var currentAnalyzer: ObjectDetectorAnalyzer? = null
+    @Volatile var currentAnalyzer: ObjectDetectorAnalyzer? = null
+        private set
     var previewView: PreviewView? = null
-    private var cameraExecutor = Executors.newSingleThreadExecutor()
-    val analysisExecutor = Executors.newSingleThreadExecutor()
+    private var cameraExecutor = newExecutor("camera-capture")
+    val analysisExecutor = newExecutor("camera-analysis")
+    private var imageAnalysis: ImageAnalysis? = null
+
+    /** Called on main. clearAnalyzer prevents new frames; the executor barrier closes the old
+     * detector only after every already-delivered frame has returned. */
+    fun replaceAnalyzer(useCase: ImageAnalysis, analyzer: ObjectDetectorAnalyzer?) {
+        check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
+        imageAnalysis?.clearAnalyzer()
+        val previous = currentAnalyzer
+        currentAnalyzer = analyzer
+        imageAnalysis = useCase.takeIf { analyzer != null }
+        if (previous != null) analysisExecutor.execute(previous::close)
+        if (analyzer != null) useCase.setAnalyzer(analysisExecutor, analyzer)
+    }
 
     fun takePhoto() {
         // Tối ưu hóa phản hồi: Trích xuất trực tiếp bitmap hiện tại từ PreviewView
@@ -97,7 +116,7 @@ class CameraController(
         }
 
         if (cameraExecutor.isShutdown) {
-            cameraExecutor = Executors.newSingleThreadExecutor()
+            cameraExecutor = newExecutor("camera-capture")
         }
 
         capture.takePicture(
@@ -154,7 +173,7 @@ class CameraController(
             ?: return onError(IllegalStateException("Preview transformation is not ready"))
         val capture = imageCapture
             ?: return onError(IllegalStateException("Camera capture is not ready"))
-        if (cameraExecutor.isShutdown) cameraExecutor = Executors.newSingleThreadExecutor()
+        if (cameraExecutor.isShutdown) cameraExecutor = newExecutor("camera-capture")
         capture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: ImageProxy) {
                 try {
@@ -198,13 +217,22 @@ class CameraController(
 
     fun release() {
         try {
-            currentAnalyzer?.close()
+            imageAnalysis?.clearAnalyzer()
+            imageAnalysis = null
+            val analyzer = currentAnalyzer
+            currentAnalyzer = null
             if (!cameraExecutor.isShutdown) {
                 cameraExecutor.shutdown()
             }
             if (!analysisExecutor.isShutdown) {
                 analysisExecutor.shutdown()
+                // All analyze() calls precede termination. MediaPipe and its reusable bitmap must
+                // not be closed/recycled while native inference can still be reading them.
+                if (!analysisExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    Log.w("CameraController", "Timed out waiting for image analysis to stop")
+                }
             }
+            analyzer?.close()
         } catch (e: Exception) {
             Log.w("CameraController", "Error releasing camera executor", e)
         }
@@ -214,6 +242,13 @@ class CameraController(
         if (degrees == 0f) return bitmap
         val matrix = Matrix().apply { postRotate(degrees) }
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    }
+
+    private companion object {
+        val threadIds = AtomicInteger()
+        fun newExecutor(role: String) = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "$role-${threadIds.incrementAndGet()}")
+        }
     }
 }
 
@@ -265,11 +300,21 @@ fun CameraPreviewView(
     }
 
     LaunchedEffect(isFrontCamera, previewView, lifecycleOwner, detectorRetryKey) {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-        cameraProviderFuture.addListener({
-            try {
-                val provider = cameraProviderFuture.get()
-                cameraProvider = provider
+        // MediaPipe loads the model and native runtime here; never perform that work on
+        // CameraX's main executor. LaunchedEffect resumes on main before binding/state callbacks.
+        val engine = withContext(Dispatchers.Default) {
+            createDetectorEngine(context) { error ->
+                ContextCompat.getMainExecutor(context).execute { onDetectorError(error) }
+            }
+        }
+        val provider = try {
+            withContext(Dispatchers.IO) { ProcessCameraProvider.getInstance(context).get() }
+        } catch (cancelled: CancellationException) {
+            engine.close()
+            throw cancelled
+        }
+        try {
+            cameraProvider = provider
 
                 val preview = Preview.Builder().build().also {
                     it.surfaceProvider = previewView.surfaceProvider
@@ -288,20 +333,23 @@ fun CameraPreviewView(
                     .setTargetResolution(Size(640, 480))
                     .build()
 
-                val engine = createDetectorEngine(context, onDetectorError)
-                cameraController.currentAnalyzer?.close()
-                cameraController.currentAnalyzer = null
                 if (engine !== DisabledObjectDetectorEngine) {
                     val analyzer = ObjectDetectorAnalyzer(
                         engine = engine,
                         onObjectsTracked = { boxes, latency, imageProxy ->
-                            onObjectsTracked(mapBoxesToPreview(boxes, imageProxy, previewView), latency)
+                            val mapped = mapBoxesToPreview(boxes, imageProxy, previewView)
+                            ContextCompat.getMainExecutor(context).execute {
+                                onObjectsTracked(mapped, latency)
+                            }
                         },
-                        onDetectionError = onDetectorError
+                        onDetectionError = { error ->
+                            ContextCompat.getMainExecutor(context).execute { onDetectorError(error) }
+                        }
                     )
-                    cameraController.currentAnalyzer = analyzer
-                    imageAnalysis.setAnalyzer(cameraController.analysisExecutor, analyzer)
+                    cameraController.replaceAnalyzer(imageAnalysis, analyzer)
                     onDetectorReady()
+                } else {
+                    cameraController.replaceAnalyzer(imageAnalysis, null)
                 }
 
                 val cameraSelector = if (isFrontCamera) {
@@ -332,11 +380,10 @@ fun CameraPreviewView(
 
                 cameraController.camera = camera
                 cameraController.toggleTorch(isTorchEnabled)
-            } catch (e: Exception) {
-                Log.e("CameraPreviewView", "Failed to bind camera use cases", e)
-                onError(e)
-            }
-        }, ContextCompat.getMainExecutor(context))
+        } catch (e: Exception) {
+            Log.e("CameraPreviewView", "Failed to bind camera use cases", e)
+            onError(e)
+        }
     }
 
     DisposableEffect(lifecycleOwner) {

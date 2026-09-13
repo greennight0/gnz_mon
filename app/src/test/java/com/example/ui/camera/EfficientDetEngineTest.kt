@@ -53,7 +53,14 @@ class EfficientDetEngineTest {
     @Test fun initializationFailureFallsBackWithoutStoppingAnalysis() {
         var reported: Exception? = null
         val fallback = createDetectorEngine({ reported = it }) { error("corrupt model") }
-        assertTrue(reported is IllegalStateException)
+        assertTrue(reported is RecoverableDetectorInitializationException)
+        assertTrue(fallback === DisabledObjectDetectorEngine)
+    }
+
+    @Test fun linkageFailureIsClassifiedAsIncompatibleRuntime() {
+        var reported: Exception? = null
+        val fallback = createDetectorEngine({ reported = it }) { throw UnsatisfiedLinkError("bad ABI") }
+        assertTrue(reported is IncompatibleDetectorRuntimeException)
         assertTrue(fallback === DisabledObjectDetectorEngine)
     }
 
