@@ -29,8 +29,7 @@ class CameraPermissionContentTest {
             CameraPermissionContent(
                 isCameraPermissionGranted = false,
                 language = AppLanguage.ENGLISH,
-                onRequestPermission = { permissionRequestCount++ },
-                onTryDemo = {}
+                onRequestPermission = { permissionRequestCount++ }
             ) {
                 ScannerOverlay(
                     detectedSpecies = null,
@@ -44,6 +43,7 @@ class CameraPermissionContentTest {
         }
 
         composeTestRule.onNodeWithTag("scanner_overlay_container").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("demo_without_camera_button").assertDoesNotExist()
         composeTestRule.onNodeWithTag("request_camera_permission_button").performClick()
 
         assertEquals(1, permissionRequestCount)

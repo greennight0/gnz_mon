@@ -8,11 +8,9 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.model.AppLanguage
 import com.example.data.model.AppThemeMode
 import com.example.data.model.SocialLink
-import com.example.data.model.SpeciesCategory
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
 import com.example.data.model.TrackingAlgorithm
-import com.example.data.repository.NatureKnowledgeBase
 import com.example.data.repository.SpeciesRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -58,6 +56,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isAnalyzing = MutableStateFlow(false)
     val isAnalyzing: StateFlow<Boolean> = _isAnalyzing.asStateFlow()
+
+    private val _recognitionError = MutableStateFlow<Throwable?>(null)
+    val recognitionError: StateFlow<Throwable?> = _recognitionError.asStateFlow()
 
     private val _isTorchEnabled = MutableStateFlow(false)
     val isTorchEnabled: StateFlow<Boolean> = _isTorchEnabled.asStateFlow()
@@ -218,7 +219,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _boxSpeciesMap.value = map
         }
         _detectedSpecies.value = null
-        triggerDemoSampleScan()
+    }
+
+    fun reportRecognitionError(error: Throwable = IllegalStateException("Image recognition failed")) {
+        _recognitionError.value = error
+    }
+
+    fun clearRecognitionError() {
+        _recognitionError.value = null
     }
 
     /**
@@ -243,6 +251,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun analyzeImage(bitmap: Bitmap) {
         viewModelScope.launch {
             _isAnalyzing.value = true
+            _recognitionError.value = null
             _detectedSpecies.value = null // Xóa kết quả cũ ngay lập tức để hiển thị HUD quét laser
             try {
                 // Tối ưu hóa: Nếu có Bounding Box đang được chọn/theo dõi, crop chính xác vùng mục tiêu
@@ -270,19 +279,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } catch (e: Exception) {
-                val targetBox = _trackedObjects.value.find { it.id == _selectedTrackId.value }
-                val fallback = getMatchedSampleForBox(targetBox)
-                _detectedSpecies.value = fallback
-
-                if (targetBox != null) {
-                    val newMap = _boxSpeciesMap.value.toMutableMap()
-                    newMap[targetBox.id] = fallback
-                    _boxSpeciesMap.value = newMap
-
-                    _trackedObjects.value = _trackedObjects.value.map { box ->
-                        if (box.id == targetBox.id) box.copy(identifiedSpecies = fallback) else box
-                    }
-                }
+                _detectedSpecies.value = null
+                reportRecognitionError(e)
             } finally {
                 _isAnalyzing.value = false
             }
@@ -304,55 +302,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         } catch (e: Exception) {
             bitmap
-        }
-    }
-
-    fun triggerDemoSampleScan() {
-        viewModelScope.launch {
-            _isAnalyzing.value = true
-            _detectedSpecies.value = null // Xóa kết quả cũ để kích hoạt animation quét mới
-            kotlinx.coroutines.delay(450) // Tạo cảm giác quét laser chân thực
-
-            val targetBox = _trackedObjects.value.find { it.id == _selectedTrackId.value }
-                ?: _trackedObjects.value.find { it.isSelected }
-                ?: _trackedObjects.value.firstOrNull()
-
-            val sample = getMatchedSampleForBox(targetBox)
-            _detectedSpecies.value = sample
-
-            if (targetBox != null) {
-                val newMap = _boxSpeciesMap.value.toMutableMap()
-                newMap[targetBox.id] = sample
-                _boxSpeciesMap.value = newMap
-
-                _trackedObjects.value = _trackedObjects.value.map { box ->
-                    if (box.id == targetBox.id) box.copy(identifiedSpecies = sample) else box
-                }
-            }
-            repository.saveSpeciesToJournal(sample)
-            _isAnalyzing.value = false
-        }
-    }
-
-    private fun getMatchedSampleForBox(box: TrackedBoundingBox?): SpeciesInfo {
-        val label = box?.label?.lowercase() ?: ""
-        val all = NatureKnowledgeBase.SAMPLE_SPECIES
-        return when {
-            label.contains("plant") || label.contains("thực vật") || label.contains("flora") -> {
-                all.filter { it.category == SpeciesCategory.PLANT.name }.randomOrNull()
-                    ?: NatureKnowledgeBase.getRandomSpecies()
-            }
-            label.contains("animal") || label.contains("động vật") || label.contains("fauna") -> {
-                all.filter { it.category == SpeciesCategory.ANIMAL.name || it.category == SpeciesCategory.INSECT.name || it.category == SpeciesCategory.BIRD.name }.randomOrNull()
-                    ?: NatureKnowledgeBase.getRandomSpecies()
-            }
-            label.contains("fungi") || label.contains("nấm") -> {
-                all.filter { it.category == SpeciesCategory.FUNGI.name || it.category == SpeciesCategory.PLANT.name }.randomOrNull()
-                    ?: NatureKnowledgeBase.getRandomSpecies()
-            }
-            else -> {
-                NatureKnowledgeBase.getRandomSpecies()
-            }
         }
     }
 
