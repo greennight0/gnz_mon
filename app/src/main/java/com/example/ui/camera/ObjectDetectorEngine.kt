@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.RectF
 import androidx.camera.core.ImageProxy
+import com.example.BuildConfig
 import com.example.data.model.TrackedBoundingBox
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
@@ -117,7 +118,7 @@ class EfficientDetLiteEngine private constructor(
     }
 
     companion object {
-        const val MODEL_ASSET = "models/efficientdet_lite0_int8.tflite"
+        val MODEL_ASSET: String = BuildConfig.DETECTOR_MODEL_ASSET
         fun create(context: Context, scoreThreshold: Float = 0.35f): EfficientDetLiteEngine {
             // Opening first gives a deterministic, controlled error for absent/corrupt packaging.
             context.assets.open(MODEL_ASSET).use { require(it.read() >= 0) }
