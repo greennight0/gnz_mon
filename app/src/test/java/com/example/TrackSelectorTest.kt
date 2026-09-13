@@ -4,15 +4,18 @@ import android.graphics.RectF
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.dp
+import com.example.data.model.AppLanguage
 import com.example.data.model.TrackedBoundingBox
-import com.example.ui.components.TrackSelectorBar
+import com.example.ui.components.ScannerOverlay
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -23,43 +26,68 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class TrackSelectorTest {
-    @get:Rule val composeRule = createComposeRule()
+    @get:Rule
+    val composeRule = createComposeRule()
 
-    private fun box(id: Int) = TrackedBoundingBox(
-        id = id,
-        normalizedRect = RectF(0.1f, 0.1f, 0.3f, 0.3f),
-        label = "Target $id",
-        confidence = 0.8f + id / 1000f
+    private val trackedBox = TrackedBoundingBox(
+        id = 42,
+        normalizedRect = RectF(0.2f, 0.25f, 0.6f, 0.55f),
+        label = "Nature Specimen (Mẫu vật)",
+        confidence = 0.92f
     )
 
-    @Test
-    fun chipsSelectDeselectAdvanceAndSupportManyTargets() {
+    private fun setOverlayContent(onSelectionChanged: (Int?) -> Unit) {
         var selectedId by mutableStateOf<Int?>(null)
-        var boxes by mutableStateOf((1..12).map(::box))
         composeRule.setContent {
-            TrackSelectorBar(
-                trackedObjects = boxes,
+            ScannerOverlay(
+                modifier = Modifier.size(400.dp, 800.dp),
+                detectedSpecies = null,
+                isAnalyzing = false,
+                language = AppLanguage.VIETNAMESE,
+                trackedObjects = listOf(trackedBox),
                 selectedTrackId = selectedId,
-                isVietnamese = true,
-                onSelectTrack = { selectedId = it },
-                onNextTrack = {
-                    val index = boxes.indexOfFirst { it.id == selectedId }
-                    selectedId = boxes[(index + 1).mod(boxes.size)].id
-                }
+                onSelectTrack = {
+                    selectedId = it
+                    onSelectionChanged(it)
+                },
+                onSpeciesClick = {},
+                onCaptureClick = {}
             )
         }
+    }
 
-        composeRule.onNodeWithTag("track_selector_1").performClick().assertIsSelected()
-        assertEquals(1, selectedId)
-        composeRule.onNodeWithTag("next_track_button").performClick()
-        composeRule.onNodeWithTag("track_selector_2").assertIsSelected()
-        assertEquals(2, selectedId)
-        composeRule.onNodeWithTag("track_selector_2").performClick().assertIsNotSelected()
-        assertEquals(null, selectedId)
+    @Test
+    fun selectorBarIsRemovedAndBadgeSelectsThenDeselectsTrack() {
+        var lastSelectedId: Int? = null
+        setOverlayContent { lastSelectedId = it }
 
-        composeRule.runOnIdle { boxes = boxes.filterNot { it.id == 2 } }
-        composeRule.onNodeWithTag("track_selector_2").assertDoesNotExist()
-        composeRule.onNodeWithTag("track_selector_12").performScrollTo().performClick().assertIsSelected()
-        assertEquals(12, selectedId)
+        composeRule.onNodeWithTag("track_selector_bar").assertDoesNotExist()
+        composeRule.onNodeWithTag("box_header_tag_42")
+            .assertContentDescriptionEquals("Mục tiêu Nature Specimen (Mẫu vật)")
+            .performClick()
+            .assertIsSelected()
+        assertEquals(42, lastSelectedId)
+
+        composeRule.onNodeWithTag("box_header_tag_42")
+            .performClick()
+            .assertIsNotSelected()
+        assertEquals(null, lastSelectedId)
+    }
+
+    @Test
+    fun boundingBoxHitTargetSelectsThenDeselectsTrack() {
+        var lastSelectedId: Int? = null
+        setOverlayContent { lastSelectedId = it }
+
+        composeRule.onNodeWithTag("bounding_box_target_42")
+            .assertContentDescriptionEquals("Mục tiêu Nature Specimen (Mẫu vật)")
+            .performClick()
+            .assertIsSelected()
+        assertEquals(42, lastSelectedId)
+
+        composeRule.onNodeWithTag("bounding_box_target_42")
+            .performClick()
+            .assertIsNotSelected()
+        assertEquals(null, lastSelectedId)
     }
 }

@@ -33,8 +33,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -362,6 +360,51 @@ fun ScannerOverlay(
 
         }
 
+        // Transparent hit targets follow the same stacking order as the rendered boxes:
+        // larger boxes first, then smaller boxes, with the selected box always on top.
+        if (trackedObjects.isNotEmpty()) {
+            val sortedForHitTargets = trackedObjects.sortedWith(
+                compareBy<TrackedBoundingBox> { box ->
+                    if (box.id == selectedTrackId) 2 else 1
+                }.thenByDescending { box ->
+                    box.normalizedRect.width() * box.normalizedRect.height()
+                }
+            )
+            sortedForHitTargets.forEach { box ->
+                val isSelected = selectedTrackId == box.id
+                val left = (box.normalizedRect.left * screenW).toInt()
+                val top = (box.normalizedRect.top * screenH).toInt()
+                val width = with(density) {
+                    ((box.normalizedRect.right - box.normalizedRect.left) * screenW)
+                        .coerceAtLeast(0f)
+                        .toDp()
+                }
+                val height = with(density) {
+                    ((box.normalizedRect.bottom - box.normalizedRect.top) * screenH)
+                        .coerceAtLeast(0f)
+                        .toDp()
+                }
+
+                Box(
+                    modifier = Modifier
+                        .offset { IntOffset(left, top) }
+                        .size(width, height)
+                        .testTag("bounding_box_target_${box.id}")
+                        .semantics {
+                            selected = isSelected
+                            contentDescription = if (isVi) {
+                                "Mục tiêu ${box.label}"
+                            } else {
+                                "Target ${box.label}"
+                            }
+                        }
+                        .clickable {
+                            onSelectTrack(if (isSelected) null else box.id)
+                        }
+                )
+            }
+        }
+
         // 2. ATTACHED TRACKING BADGES (Hiển thị thẻ Tracking ID & nhãn phân loại trên từng Bounding Box)
         // Sắp xếp: Box lớn ở dưới, Box nhỏ ở trên, và Box đang được chọn ở trên cùng nhất để không bị che khuất
         if (trackedObjects.isNotEmpty()) {
@@ -389,6 +432,17 @@ fun ScannerOverlay(
                     modifier = Modifier
                         .offset { IntOffset(bLeft, bTop) }
                         .testTag("box_header_tag_${box.id}")
+                        .semantics {
+                            selected = isSelected
+                            contentDescription = if (isVi) {
+                                "Mục tiêu ${box.label}"
+                            } else {
+                                "Target ${box.label}"
+                            }
+                        }
+                        .clickable {
+                            onSelectTrack(if (isSelected) null else box.id)
+                        }
                 ) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
@@ -658,14 +712,6 @@ fun ScannerOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            TrackSelectorBar(
-                trackedObjects = trackedObjects,
-                selectedTrackId = selectedTrackId,
-                isVietnamese = isVi,
-                onSelectTrack = onSelectTrack,
-                onNextTrack = onNextTrack
-            )
-
             // 5.1 Scanning Animation State
             if (isAnalyzing) {
                 Surface(
@@ -760,15 +806,15 @@ fun ScannerOverlay(
             Text(
                 text = if (isVi) {
                     when {
-                        detectedSpecies != null -> "Nhấn nút để quét lại • Chọn chip khác để đổi mục tiêu"
-                        selectedTrackId != null -> "Đã chọn mục tiêu #${selectedTrackId} • Chạm lại chip để bỏ chọn"
-                        else -> "Chọn mục tiêu từ thanh bên trên"
+                        detectedSpecies != null -> "Nhấn nút để quét lại • Chạm nhãn hoặc khung để đổi mục tiêu"
+                        selectedTrackId != null -> "Đã chọn mục tiêu #${selectedTrackId} • Chạm lại để bỏ chọn"
+                        else -> "Chạm nhãn hoặc khung để chọn mục tiêu"
                     }
                 } else {
                     when {
-                        detectedSpecies != null -> "Tap to rescan • Choose another chip for the next target"
-                        selectedTrackId != null -> "Target #${selectedTrackId} selected • Tap its chip to deselect"
-                        else -> "Choose a target from the selector above"
+                        detectedSpecies != null -> "Tap to rescan • Tap a label or box to change target"
+                        selectedTrackId != null -> "Target #${selectedTrackId} selected • Tap again to deselect"
+                        else -> "Tap a label or box to select a target"
                     }
                 },
                 color = Color.White.copy(alpha = 0.75f),
@@ -843,82 +889,6 @@ fun ScannerOverlay(
             },
             containerColor = Color(0xFF071933)
         )
-    }
-}
-
-/** Fixed, camera-position-independent target picker with stable accessibility targets. */
-@Composable
-internal fun TrackSelectorBar(
-    trackedObjects: List<TrackedBoundingBox>,
-    selectedTrackId: Int?,
-    isVietnamese: Boolean,
-    onSelectTrack: (Int?) -> Unit,
-    onNextTrack: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    if (trackedObjects.isEmpty()) return
-
-    Row(
-        modifier = modifier.fillMaxWidth().testTag("track_selector_bar"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        LazyRow(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(trackedObjects, key = { it.id }) { box ->
-                val isSelected = selectedTrackId == box.id
-                val targetNumber = trackedObjects.indexOf(box) + 1
-                Surface(
-                    onClick = { onSelectTrack(if (isSelected) null else box.id) },
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isSelected) AmberGlow.copy(alpha = 0.28f) else Color(0xE6051528),
-                    border = androidx.compose.foundation.BorderStroke(
-                        if (isSelected) 2.dp else 1.dp,
-                        if (isSelected) AmberGlow else LaserCyan.copy(alpha = 0.7f)
-                    ),
-                    modifier = Modifier
-                        .height(48.dp)
-                        .testTag("track_selector_${box.id}")
-                        .semantics {
-                            selected = isSelected
-                            contentDescription = if (isVietnamese) {
-                                "Chọn mục tiêu số $targetNumber"
-                            } else {
-                                "Select target number $targetNumber"
-                            }
-                        }
-                ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "#${box.id}  ${box.label}",
-                            color = if (isSelected) AmberGlow else Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                        Text(
-                            text = "${(box.confidence * 100).toInt()}% confidence",
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 9.sp,
-                            maxLines = 1
-                        )
-                    }
-                }
-            }
-        }
-        IconButton(
-            onClick = onNextTrack,
-            modifier = Modifier.size(48.dp).testTag("next_track_button").semantics {
-                contentDescription = if (isVietnamese) "Mục tiêu kế tiếp" else "Next target"
-            }
-        ) {
-            Icon(Icons.Filled.SwapHoriz, contentDescription = null, tint = CyberCyan)
-        }
     }
 }
 
