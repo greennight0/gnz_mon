@@ -76,6 +76,9 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+
+private const val DETECTOR_RETRY_DEBOUNCE_MILLIS = 750L
 
 class MainActivity : ComponentActivity() {
 
@@ -156,6 +159,14 @@ fun MysteriesOfNatureApp(
 
     var isSnsOpen by remember { mutableStateOf(false) }
     var detectorRetryKey by remember { mutableStateOf(0) }
+    var isDetectorRetryDebounced by remember { mutableStateOf(false) }
+
+    LaunchedEffect(detectorRetryKey) {
+        if (detectorRetryKey > 0) {
+            delay(DETECTOR_RETRY_DEBOUNCE_MILLIS)
+            isDetectorRetryDebounced = false
+        }
+    }
 
     LaunchedEffect(recognitionError, language) {
         recognitionError?.let { error ->
@@ -275,7 +286,12 @@ fun MysteriesOfNatureApp(
                             cameraPermissionState.launchPermissionRequest()
                         }
                     },
-                    onRetryDetector = { detectorRetryKey++ },
+                    onRetryDetector = {
+                        if (!isDetectorRetryDebounced) {
+                            isDetectorRetryDebounced = true
+                            detectorRetryKey++
+                        }
+                    },
                     onDismissSpecies = {
                         viewModel.dismissSpeciesTag()
                     },
