@@ -3,12 +3,9 @@ package com.example.ui.components
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -49,10 +46,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -84,6 +78,7 @@ import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesCategory
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
+import com.example.data.model.DetectorState
 import com.example.data.model.ScanState
 import com.example.ui.theme.AmberGlow
 import com.example.ui.theme.CyberCyan
@@ -205,6 +200,7 @@ fun ScannerOverlay(
     scanThumbnail: android.graphics.Bitmap? = null,
     language: AppLanguage,
     trackedObjects: List<TrackedBoundingBox> = emptyList(),
+    detectorState: DetectorState = DetectorState.NotReady,
     selectedTrackId: Int? = null,
     onSelectTrack: (Int?) -> Unit = {},
     onSpeciesClick: (SpeciesInfo) -> Unit,
@@ -262,9 +258,6 @@ fun ScannerOverlay(
         label = "laser_sweep"
     )
 
-    // User tap-to-track target location (fallback or manual repositioning)
-    var userTargetOffset by remember { mutableStateOf<Offset?>(null) }
-
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
@@ -276,29 +269,6 @@ fun ScannerOverlay(
         val minimumDisplaySizePx = with(density) { MIN_DRAWN_BOX_DP.dp.toPx() }
         val minimumTouchTargetPx = with(density) { MIN_TOUCH_TARGET_DP.dp.toPx() }
         val maximumVelocityPaddingPx = with(density) { MAX_VELOCITY_PADDING_DP.dp.toPx() }
-
-        // Tính toán kích thước Bounding Box mặc định khi chưa có vật thể nào trong danh sách
-        val defaultBoxW = with(density) { min(290.dp.toPx(), screenW - 48.dp.toPx()) }
-        val defaultBoxH = with(density) { min(310.dp.toPx(), screenH * 0.44f) }
-        val defaultCenter = userTargetOffset ?: Offset(screenW * 0.5f, screenH * 0.41f)
-
-        val halfW = defaultBoxW * 0.5f
-        val halfH = defaultBoxH * 0.5f
-        val minCenterX = halfW + with(density) { 16.dp.toPx() }
-        val maxCenterX = screenW - halfW - with(density) { 16.dp.toPx() }
-        val minCenterY = halfH + with(density) { 110.dp.toPx() }
-        val maxCenterY = screenH - halfH - with(density) { 145.dp.toPx() }
-
-        val animatedCenterX by animateFloatAsState(
-            targetValue = defaultCenter.x.coerceIn(minCenterX, maxCenterX),
-            animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioLowBouncy),
-            label = "fallback_center_x"
-        )
-        val animatedCenterY by animateFloatAsState(
-            targetValue = defaultCenter.y.coerceIn(minCenterY, maxCenterY),
-            animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioLowBouncy),
-            label = "fallback_center_y"
-        )
 
         // 1. BOUNDING BOX & OBJECT TRACKING CANVAS
         Canvas(
@@ -443,71 +413,6 @@ fun ScannerOverlay(
                         drawLine(CyberCyan, Offset(bLeft, laserY), Offset(bRight, laserY), 2.5.dp.toPx())
                     }
                 }
-            } else {
-                // Fallback Primary Bounding Box khi chưa phát hiện đối tượng
-                val bLeft = animatedCenterX - halfW
-                val bTop = animatedCenterY - halfH
-                val bRight = animatedCenterX + halfW
-                val bBottom = animatedCenterY + halfH
-                val bWidth = bRight - bLeft
-                val bHeight = bBottom - bTop
-
-                val boxColor = when {
-                    detectedSpecies != null -> NeonEmerald
-                    isAnalyzing -> CyberCyan
-                    else -> LaserCyan
-                }
-
-                drawRect(
-                    color = boxColor.copy(alpha = 0.035f),
-                    topLeft = Offset(bLeft, bTop),
-                    size = Size(bWidth, bHeight)
-                )
-                drawRect(
-                    color = boxColor.copy(alpha = 0.4f * pulseGlow),
-                    topLeft = Offset(bLeft, bTop),
-                    size = Size(bWidth, bHeight),
-                    style = Stroke(
-                        width = 1.2.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
-                    )
-                )
-
-                // 4 Corner brackets
-                val cornerLen = 32.dp.toPx()
-                val strokeW = 3.5.dp.toPx()
-                val cp = cornerPulse
-
-                drawLine(boxColor, Offset(bLeft - cp, bTop - cp), Offset(bLeft - cp + cornerLen, bTop - cp), strokeW)
-                drawLine(boxColor, Offset(bLeft - cp, bTop - cp), Offset(bLeft - cp, bTop - cp + cornerLen), strokeW)
-                drawLine(boxColor, Offset(bRight + cp, bTop - cp), Offset(bRight + cp - cornerLen, bTop - cp), strokeW)
-                drawLine(boxColor, Offset(bRight + cp, bTop - cp), Offset(bRight + cp, bTop - cp + cornerLen), strokeW)
-                drawLine(boxColor, Offset(bLeft - cp, bBottom + cp), Offset(bLeft - cp + cornerLen, bBottom + cp), strokeW)
-                drawLine(boxColor, Offset(bLeft - cp, bBottom + cp), Offset(bLeft - cp, bBottom + cp - cornerLen), strokeW)
-                drawLine(boxColor, Offset(bRight + cp, bBottom + cp), Offset(bRight + cp - cornerLen, bBottom + cp), strokeW)
-                drawLine(boxColor, Offset(bRight + cp, bBottom + cp), Offset(bRight + cp, bBottom + cp - cornerLen), strokeW)
-
-                // Tâm ngắm
-                val cx = animatedCenterX
-                val cy = animatedCenterY
-                val chLen = 8.dp.toPx()
-                drawLine(boxColor.copy(alpha = 0.7f), Offset(cx - chLen, cy), Offset(cx + chLen, cy), 1.5.dp.toPx())
-                drawLine(boxColor.copy(alpha = 0.7f), Offset(cx, cy - chLen), Offset(cx, cy + chLen), 1.5.dp.toPx())
-
-                // Laser scan khi phân tích
-                if (isAnalyzing) {
-                    val laserY = bTop + bHeight * laserProgress
-                    drawRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, CyberCyan.copy(alpha = 0.25f), CyberCyan.copy(alpha = 0.8f), Color.Transparent),
-                            startY = laserY - 14.dp.toPx(),
-                            endY = laserY + 14.dp.toPx()
-                        ),
-                        topLeft = Offset(bLeft, laserY - 14.dp.toPx()),
-                        size = Size(bWidth, 28.dp.toPx())
-                    )
-                    drawLine(CyberCyan, Offset(bLeft, laserY), Offset(bRight, laserY), 2.5.dp.toPx())
-                }
             }
 
         }
@@ -645,62 +550,28 @@ fun ScannerOverlay(
                 }
             }
         } else {
-            // Header tag gắn trên Primary Bounding Box
-            val bLeft = (animatedCenterX - halfW).toInt()
-            val bTop = (animatedCenterY - halfH - with(density) { 34.dp.toPx() }).toInt()
-                .coerceAtLeast(with(density) { 110.dp.toPx().toInt() })
-
-            Box(
+            val statusText = when (detectorState) {
+                DetectorState.NotReady -> if (isVi) "Detector đang khởi động…" else "Detector is starting…"
+                DetectorState.NoObjects -> if (isVi) "Chưa phát hiện đối tượng. Hãy hướng camera vào sinh vật." else "No object detected. Point the camera at an organism."
+                is DetectorState.Error -> if (isVi) "Detector gặp lỗi. Hãy khởi động lại camera." else "Detector error. Please restart the camera."
+                DetectorState.Tracking -> if (isVi) "Đang chờ mục tiêu ổn định…" else "Waiting for a stable target…"
+            }
+            Surface(
                 modifier = Modifier
-                    .offset { IntOffset(bLeft, bTop) }
-                    .clickable {
-                        if (detectedSpecies != null) {
-                            onSpeciesClick(detectedSpecies)
-                        }
-                    }
-                    .testTag("bounding_box_header_tag")
+                    .align(Alignment.Center)
+                    .padding(horizontal = 32.dp)
+                    .testTag("detector_status_guidance"),
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xCC061426),
+                border = androidx.compose.foundation.BorderStroke(1.dp, LaserCyan.copy(alpha = 0.6f))
             ) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color(0xCC061426),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        if (detectedSpecies != null) NeonEmerald else LaserCyan.copy(alpha = 0.6f)
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .clip(CircleShape)
-                                .background(if (detectedSpecies != null) NeonEmerald else LaserCyan)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (detectedSpecies != null) {
-                                if (isVi) "👆 CHẠM ĐỂ XEM THÔNG TIN CƠ BẢN" else "👆 TAP TO VIEW BASIC INFO"
-                            } else {
-                                if (isVi) "KHUNG THEO DÕI ĐỐI TƯỢNG" else "OBJECT TRACKING BOX"
-                            },
-                            color = if (detectedSpecies != null) NeonEmerald else LaserCyan,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
-                        )
-                        if (detectedSpecies == null) {
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = "• Tracking",
-                                color = Color.White.copy(alpha = 0.75f),
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
+                Text(
+                    text = statusText,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                    color = if (detectorState is DetectorState.Error) AmberGlow else LaserCyan,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
 
