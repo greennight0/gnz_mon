@@ -1,4 +1,10 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.util.Locale
+import java.util.zip.ZipFile
+
+// This is the single build-time source of truth for both BuildConfig and model validation.
+val detectorModelAsset = "models/efficientdet_lite0_int8.tflite"
+val minimumDetectorModelBytes = 1_000_000L
 
 plugins {
   alias(libs.plugins.android.application)
@@ -21,6 +27,7 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    buildConfigField("String", "DETECTOR_MODEL_ASSET", "\"$detectorModelAsset\"")
   }
 
   buildTypes {
@@ -122,4 +129,68 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+
+androidComponents {
+  onVariants(selector().all()) { variant ->
+    val capitalizedVariant = variant.name.replaceFirstChar {
+      if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString()
+    }
+    val modelFile = layout.projectDirectory.file("src/main/assets/$detectorModelAsset")
+    val validateModel = tasks.register("validate${capitalizedVariant}DetectorModel") {
+      group = "verification"
+      description = "Validates the MediaPipe detector model before ${variant.name} assets are merged."
+      inputs.file(modelFile)
+      doLast {
+        val file = modelFile.asFile
+        check(file.isFile) { "Detector model is missing or is not a regular file: ${file.path}" }
+        check(file.length() > minimumDetectorModelBytes) {
+          "Detector model is only ${file.length()} bytes (minimum: $minimumDetectorModelBytes): ${file.path}"
+        }
+        val prefix = file.inputStream().buffered().use { input ->
+          ByteArray(128).also { input.read(it) }.decodeToString()
+        }
+        check(!prefix.startsWith("version https://git-lfs.github.com/spec/v1")) {
+          "Detector model is a Git LFS pointer rather than model data: ${file.path}"
+        }
+      }
+    }
+
+    tasks.matching { it.name == "merge${capitalizedVariant}Assets" }.configureEach {
+      dependsOn(validateModel)
+    }
+
+    val verifyArchive = tasks.register("verify${capitalizedVariant}DetectorModelArchive") {
+      group = "verification"
+      description = "Checks that ${variant.name} APK/AAB archives contain exactly $detectorModelAsset."
+      val outputDirectory = layout.buildDirectory.dir("outputs")
+      outputs.upToDateWhen { false }
+      doLast {
+        val archives = outputDirectory.get().asFile.walkTopDown()
+          .filter { it.isFile && (it.extension == "apk" || it.extension == "aab") }
+          .filter { it.path.contains("/${variant.name}/") || it.name.contains(variant.name, ignoreCase = true) }
+          .toList()
+        check(archives.isNotEmpty()) { "No ${variant.name} APK/AAB found under ${outputDirectory.get().asFile}" }
+        archives.forEach { archive ->
+          ZipFile(archive).use { zip ->
+            val matches = zip.entries().asSequence()
+              .filter { !it.isDirectory && it.name.endsWith("assets/$detectorModelAsset") }
+              .toList()
+            check(matches.size == 1) {
+              "${archive.name} must contain exactly one assets/$detectorModelAsset; found ${matches.map { it.name }}"
+            }
+            check(matches.single().size > minimumDetectorModelBytes) {
+              "Packaged detector model in ${archive.name} is too small: ${matches.single().size} bytes"
+            }
+          }
+        }
+      }
+    }
+    tasks.matching {
+      it.name == "assemble$capitalizedVariant" || it.name == "bundle$capitalizedVariant"
+    }.configureEach {
+      finalizedBy(verifyArchive)
+    }
+  }
 }

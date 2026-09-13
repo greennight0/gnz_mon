@@ -14,8 +14,11 @@ import org.robolectric.annotation.Config
 class EfficientDetEngineTest {
     @Test fun packagedModelCanBeLoadedFromAssets() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        context.assets.open(EfficientDetLiteEngine.MODEL_ASSET).use {
-            assertTrue("The real model, not a marker file, must be packaged", it.available() > 1_000_000)
+        context.assets.open(EfficientDetLiteEngine.MODEL_ASSET).use { input ->
+            val bytes = input.readBytes()
+            assertTrue("The real model, not a marker file, must be packaged", bytes.size > 1_000_000)
+            val prefix = bytes.copyOfRange(0, minOf(bytes.size, 128)).decodeToString()
+            assertTrue("A Git LFS pointer must never be packaged", !prefix.startsWith("version https://git-lfs.github.com/spec/v1"))
         }
     }
 
