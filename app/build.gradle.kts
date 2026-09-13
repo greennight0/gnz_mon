@@ -1,6 +1,6 @@
+import com.android.build.api.artifact.SingleArtifact
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 import java.util.Locale
-import java.util.zip.ZipFile
 
 // This is the single build-time source of truth for both BuildConfig and model validation.
 val detectorModelAsset = "models/efficientdet_lite0_int8.tflite"
@@ -151,31 +151,18 @@ androidComponents {
       dependsOn(validateModel)
     }
 
-    val verifyArchive = tasks.register("verify${capitalizedVariant}DetectorModelArchive") {
+    val verifyArchive = tasks.register<VerifyDetectorModelArchiveTask>(
+      "verify${capitalizedVariant}DetectorModelArchive",
+    ) {
       group = "verification"
       description = "Checks that ${variant.name} APK/AAB archives contain exactly $detectorModelAsset."
-      val outputDirectory = layout.buildDirectory.dir("outputs")
-      outputs.upToDateWhen { false }
-      doLast {
-        val archives = outputDirectory.get().asFile.walkTopDown()
-          .filter { it.isFile && (it.extension == "apk" || it.extension == "aab") }
-          .filter { it.path.contains("/${variant.name}/") || it.name.contains(variant.name, ignoreCase = true) }
-          .toList()
-        check(archives.isNotEmpty()) { "No ${variant.name} APK/AAB found under ${outputDirectory.get().asFile}" }
-        archives.forEach { archive ->
-          ZipFile(archive).use { zip ->
-            val matches = zip.entries().asSequence()
-              .filter { !it.isDirectory && it.name.endsWith("assets/$detectorModelAsset") }
-              .toList()
-            check(matches.size == 1) {
-              "${archive.name} must contain exactly one assets/$detectorModelAsset; found ${matches.map { it.name }}"
-            }
-            check(matches.single().size > minimumDetectorModelBytes) {
-              "Packaged detector model in ${archive.name} is too small: ${matches.single().size} bytes"
-            }
-          }
-        }
-      }
+      variantName.set(variant.name)
+      expectedAssetPath.set("assets/$detectorModelAsset")
+      minimumByteCount.set(minimumDetectorModelBytes)
+      archives.from(
+        variant.artifacts.get(SingleArtifact.APK),
+        variant.artifacts.get(SingleArtifact.BUNDLE),
+      )
     }
     tasks.matching {
       it.name == "assemble$capitalizedVariant" || it.name == "bundle$capitalizedVariant"
