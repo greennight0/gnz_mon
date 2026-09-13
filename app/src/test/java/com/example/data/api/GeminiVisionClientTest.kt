@@ -4,12 +4,16 @@ import android.graphics.Bitmap
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AppDatabase
 import com.example.data.model.RecognitionResult
+import com.example.data.model.ScanException
+import com.example.data.model.ScanFailureReason
 import com.example.data.repository.SpeciesRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
+import java.net.SocketTimeoutException
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -47,14 +51,14 @@ class GeminiVisionClientTest {
     fun `organism missing taxonomy is rejected instead of defaulting to plant`() {
         val result = client.parseSpeciesJson(validOrganismJson().replace("\"family\":\"Passeridae\",", ""))
 
-        assertTrue(result is RecognitionResult.Failure)
+        assertFailure(result, ScanFailureReason.InvalidResponse)
     }
 
     @Test
     fun `kingdom inconsistent taxonomy is rejected`() {
         val result = client.parseSpeciesJson(validOrganismJson().replace("Animalia", "Plantae"))
 
-        assertTrue(result is RecognitionResult.Failure)
+        assertFailure(result, ScanFailureReason.InvalidResponse)
     }
 
     @Test
@@ -66,8 +70,38 @@ class GeminiVisionClientTest {
 
         val result = repository.identifyImage(bitmap, " ")
 
-        assertTrue(result is RecognitionResult.Failure)
+        assertFailure(result, ScanFailureReason.MissingApiKey)
         assertTrue(repository.discoveredSpeciesFlow.first().isEmpty())
+    }
+
+    @Test fun `http status is retained`() = assertFailure(
+        client.parseApiResponse(503, false, "down"), ScanFailureReason.Http(503)
+    )
+
+    @Test fun `empty response has its own category`() = assertFailure(
+        client.parseApiResponse(200, true, ""), ScanFailureReason.EmptyResponse
+    )
+
+    @Test fun `invalid json has its own category`() = assertFailure(
+        client.parseApiResponse(200, true, "not json"), ScanFailureReason.InvalidResponse
+    )
+
+    @Test fun `timeout has its own category`() = assertFailure(
+        client.mapTransportFailure(SocketTimeoutException()), ScanFailureReason.Timeout
+    )
+
+    @Test fun `network failure has its own category`() = assertFailure(
+        client.mapTransportFailure(IOException()), ScanFailureReason.Network
+    )
+
+    @Test fun `low organism confidence has its own category`() = assertFailure(
+        client.parseSpeciesJson(validOrganismJson().replace("\"confidenceScore\":96", "\"confidenceScore\":60")),
+        ScanFailureReason.LowConfidence(60)
+    )
+
+    private fun assertFailure(result: RecognitionResult, expected: ScanFailureReason) {
+        assertTrue(result is RecognitionResult.Failure)
+        assertEquals(expected, ((result as RecognitionResult.Failure).error as ScanException).reason)
     }
 
     private fun assertNotOrganism(label: String, confidence: Int) {

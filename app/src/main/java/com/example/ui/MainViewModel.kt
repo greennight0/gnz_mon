@@ -11,6 +11,10 @@ import com.example.data.model.SocialLink
 import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
+import com.example.data.model.ScanException
+import com.example.data.model.ScanFailureReason
+import com.example.data.model.ScanState
+import com.example.data.model.ScanTransportPhase
 import com.example.data.repository.SpeciesRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -20,7 +24,11 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
-data class ScanRequest(val trackId: Int, val croppedBitmap: Bitmap)
+data class ScanRequest(
+    val trackId: Int,
+    val croppedBitmap: Bitmap,
+    val snapshotRect: RectF = RectF(0f, 0f, 1f, 1f)
+)
 
 private const val TARGET_LOCK_MISSED_FRAME_TIMEOUT = 3
 private const val TARGET_LOCK_MIN_IOU = 0.20f
@@ -61,6 +69,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _recognitionError = MutableStateFlow<Throwable?>(null)
     val recognitionError: StateFlow<Throwable?> = _recognitionError.asStateFlow()
+
+    private val _scanState = MutableStateFlow<ScanState>(ScanState.Idle)
+    val scanState: StateFlow<ScanState> = _scanState.asStateFlow()
+
+    private val _scanThumbnail = MutableStateFlow<Bitmap?>(null)
+    val scanThumbnail: StateFlow<Bitmap?> = _scanThumbnail.asStateFlow()
+    private val runningTrackIds = mutableSetOf<Int>()
+    private val captureReservations = mutableSetOf<Int>()
 
     private val _targetSelectionRequired = MutableStateFlow(false)
     val targetSelectionRequired: StateFlow<Boolean> = _targetSelectionRequired.asStateFlow()
@@ -296,6 +312,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _recognitionError.value = error
     }
 
+    fun beginCapture(trackId: Int, snapshotRect: RectF): Boolean {
+        if (trackId in runningTrackIds) return false
+        runningTrackIds += trackId
+        captureReservations += trackId
+        _scanState.value = ScanState.CapturingFrame(trackId, RectF(snapshotRect))
+        return true
+    }
+
     fun clearRecognitionError() {
         _recognitionError.value = null
     }
@@ -309,14 +333,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun analyzeImage(request: ScanRequest) {
         val targetId = request.trackId
+        if (!captureReservations.remove(targetId) && !runningTrackIds.add(targetId)) return
+        val snapshotRect = RectF(request.snapshotRect)
         viewModelScope.launch {
             _isAnalyzing.value = true
+            _scanState.value = ScanState.CroppingTarget(targetId, snapshotRect)
+            _scanThumbnail.value = request.croppedBitmap
             _recognitionError.value = null
             _notOrganism.value = null
             _detectedSpecies.value = null // Xóa kết quả cũ ngay lập tức để hiển thị HUD quét laser
             try {
                 // The bitmap and ID are one immutable click-time request; do not re-read tracking.
-                when (val result = repository.identifyImage(request.croppedBitmap, _customApiKey.value.takeIf { it.isNotBlank() })) {
+                val result = repository.identifyImage(
+                    request.croppedBitmap,
+                    _customApiKey.value.takeIf { it.isNotBlank() }
+                ) { phase ->
+                    _scanState.value = when (phase) {
+                        ScanTransportPhase.ENCODING -> ScanState.EncodingImage(targetId, snapshotRect)
+                        ScanTransportPhase.UPLOADING -> ScanState.Uploading(targetId, snapshotRect)
+                        ScanTransportPhase.ANALYZING -> ScanState.Analyzing(targetId, snapshotRect)
+                    }
+                }
+                when (result) {
                     is RecognitionResult.Organism -> {
                         _detectedSpecies.value = result.species
                         run {
@@ -330,13 +368,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         _notOrganism.value = result
                         clearSpeciesForTarget(targetId)
                     }
-                    is RecognitionResult.Failure -> reportRecognitionError(result.error)
+                    is RecognitionResult.Failure -> {
+                        val reason = (result.error as? ScanException)?.reason
+                            ?: ScanFailureReason.InvalidResponse
+                        _scanState.value = ScanState.Failed(targetId, snapshotRect, reason)
+                        reportRecognitionError(result.error)
+                    }
+                }
+                if (result !is RecognitionResult.Failure) {
+                    _scanState.value = ScanState.Completed(targetId, snapshotRect, result)
                 }
             } catch (e: Exception) {
                 _detectedSpecies.value = null
+                val reason = (e as? ScanException)?.reason ?: ScanFailureReason.InvalidResponse
+                _scanState.value = ScanState.Failed(targetId, snapshotRect, reason)
                 reportRecognitionError(e)
             } finally {
                 _isAnalyzing.value = false
+                runningTrackIds.remove(targetId)
             }
         }
     }

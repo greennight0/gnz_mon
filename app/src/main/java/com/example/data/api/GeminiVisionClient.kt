@@ -8,6 +8,9 @@ import com.example.data.model.ConservationStatus
 import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesCategory
 import com.example.data.model.SpeciesInfo
+import com.example.data.model.ScanException
+import com.example.data.model.ScanFailureReason
+import com.example.data.model.ScanTransportPhase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -17,6 +20,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -32,7 +37,8 @@ class GeminiVisionClient {
 
     suspend fun identifyFloraOrFauna(
         bitmap: Bitmap,
-        customApiKey: String? = null
+        customApiKey: String? = null,
+        onPhase: (ScanTransportPhase) -> Unit = {}
     ): RecognitionResult = withContext(Dispatchers.IO) {
         try {
             val apiKey = if (!customApiKey.isNullOrBlank()) {
@@ -46,13 +52,12 @@ class GeminiVisionClient {
             }
 
             if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
-                return@withContext RecognitionResult.Failure(
-                    IllegalStateException("Gemini API Key is not configured.")
-                )
+                return@withContext failure(ScanFailureReason.MissingApiKey)
             }
 
             // Downscale bitmap if too large to ensure fast transmission
             val scaledBitmap = scaleBitmapToMax(bitmap, 1024)
+            onPhase(ScanTransportPhase.ENCODING)
             val base64Image = bitmapToBase64(scaledBitmap)
 
             val prompt = """
@@ -131,28 +136,39 @@ class GeminiVisionClient {
                 .post(body)
                 .build()
 
+            onPhase(ScanTransportPhase.UPLOADING)
             val response = client.newCall(request).execute()
             val responseBody = response.body?.string()
 
-            if (!response.isSuccessful || responseBody == null) {
-                return@withContext RecognitionResult.Failure(
-                    Exception("API call failed (Code ${response.code}): ${responseBody ?: response.message}")
-                )
-            }
-
-            val rootJson = JSONObject(responseBody)
-            val candidates = rootJson.optJSONArray("candidates")
-            val firstCandidate = candidates?.optJSONObject(0)
-            val parts = firstCandidate?.optJSONObject("content")?.optJSONArray("parts")
-            val rawText = parts?.optJSONObject(0)?.optString("text") ?: ""
-
-            val cleanedJsonText = cleanJsonString(rawText)
-            parseSpeciesJson(cleanedJsonText)
+            if (response.isSuccessful && !responseBody.isNullOrBlank()) onPhase(ScanTransportPhase.ANALYZING)
+            parseApiResponse(response.code, response.isSuccessful, responseBody)
+        } catch (e: SocketTimeoutException) {
+            mapTransportFailure(e)
+        } catch (e: IOException) {
+            mapTransportFailure(e)
         } catch (e: Exception) {
             Log.e("GeminiVisionClient", "Error analyzing image: ${e.message}", e)
-            RecognitionResult.Failure(e)
+            failure(ScanFailureReason.InvalidResponse, e)
         }
     }
+
+    internal fun parseApiResponse(code: Int, successful: Boolean, body: String?): RecognitionResult {
+        if (!successful) return failure(ScanFailureReason.Http(code))
+        if (body.isNullOrBlank()) return failure(ScanFailureReason.EmptyResponse)
+        val rootJson = try {
+            JSONObject(body)
+        } catch (error: Exception) {
+            return failure(ScanFailureReason.InvalidResponse, error)
+        }
+        val rawText = rootJson.optJSONArray("candidates")?.optJSONObject(0)
+            ?.optJSONObject("content")?.optJSONArray("parts")
+            ?.optJSONObject(0)?.optString("text").orEmpty()
+        if (rawText.isBlank()) return failure(ScanFailureReason.EmptyResponse)
+        return parseSpeciesJson(cleanJsonString(rawText))
+    }
+
+    internal fun mapTransportFailure(error: IOException): RecognitionResult.Failure =
+        failure(if (error is SocketTimeoutException) ScanFailureReason.Timeout else ScanFailureReason.Network, error)
 
     private fun cleanJsonString(text: String): String {
         var clean = text.trim()
@@ -172,7 +188,7 @@ class GeminiVisionClient {
         return try {
             parseRecognitionJson(JSONObject(jsonString))
         } catch (error: Exception) {
-            RecognitionResult.Failure(error)
+            failure(ScanFailureReason.InvalidResponse, error)
         }
     }
 
@@ -185,7 +201,9 @@ class GeminiVisionClient {
             require(label.isNotEmpty()) { "Missing objectLabel for non-organism" }
             return RecognitionResult.NotOrganism(label, confidence)
         }
-        require(confidence >= MINIMUM_CONFIDENCE) { "Organism confidence is below $MINIMUM_CONFIDENCE" }
+        if (confidence < MINIMUM_CONFIDENCE) {
+            return failure(ScanFailureReason.LowConfidence(confidence))
+        }
 
         fun required(name: String): String = json.optString(name).trim().also {
             require(it.isNotEmpty()) { "Missing taxonomy field: $name" }
@@ -245,6 +263,9 @@ class GeminiVisionClient {
     private companion object {
         const val MINIMUM_CONFIDENCE = 70
     }
+
+    private fun failure(reason: ScanFailureReason, cause: Throwable? = null) =
+        RecognitionResult.Failure(ScanException(reason, cause))
 
     private fun scaleBitmapToMax(bitmap: Bitmap, maxDim: Int): Bitmap {
         val width = bitmap.width
