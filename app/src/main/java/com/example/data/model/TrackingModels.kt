@@ -2,6 +2,14 @@ package com.example.data.model
 
 import android.graphics.RectF
 
+/** State of the live object detector, kept separate from species recognition. */
+sealed interface DetectorState {
+    data object NotReady : DetectorState
+    data object NoObjects : DetectorState
+    data object Tracking : DetectorState
+    data class Error(val cause: Throwable? = null) : DetectorState
+}
+
 /**
  * Đại diện cho một Bounding Box được phát hiện và theo dõi thời gian thực
  */

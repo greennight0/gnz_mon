@@ -12,6 +12,7 @@ import com.example.data.model.SocialLink
 import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
+import com.example.data.model.DetectorState
 import com.example.data.model.ScanException
 import com.example.data.model.ScanFailureReason
 import com.example.data.model.ScanState
@@ -54,8 +55,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val boxSpeciesMap: StateFlow<Map<Int, SpeciesInfo>> = _boxSpeciesMap.asStateFlow()
 
     // Danh sách các Bounding Box được phát hiện và theo dõi thời gian thực (Object Tracking)
-    private val _trackedObjects = MutableStateFlow<List<TrackedBoundingBox>>(getDefaultCandidateBoxes())
+    private val _trackedObjects = MutableStateFlow<List<TrackedBoundingBox>>(emptyList())
     val trackedObjects: StateFlow<List<TrackedBoundingBox>> = _trackedObjects.asStateFlow()
+
+    private val _detectorState = MutableStateFlow<DetectorState>(DetectorState.NotReady)
+    val detectorState: StateFlow<DetectorState> = _detectorState.asStateFlow()
 
     // ID của Track đang được người dùng chọn/khóa (mặc định null: chưa có box nào được chọn)
     private val _selectedTrackId = MutableStateFlow<Int?>(null)
@@ -123,34 +127,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _notOrganism.value = null
     }
 
-    private fun getDefaultCandidateBoxes(): List<TrackedBoundingBox> {
-        return listOf(
-            TrackedBoundingBox(
-                id = 101,
-                normalizedRect = RectF(0.12f, 0.24f, 0.48f, 0.50f),
-                label = "Flora (Thực vật)",
-                confidence = 0.94f,
-                isSelected = false
-            ),
-            TrackedBoundingBox(
-                id = 102,
-                normalizedRect = RectF(0.54f, 0.18f, 0.88f, 0.46f),
-                label = "Fauna (Động vật)",
-                confidence = 0.89f,
-                isSelected = false
-            ),
-            TrackedBoundingBox(
-                id = 103,
-                normalizedRect = RectF(0.28f, 0.54f, 0.72f, 0.76f),
-                label = "Fungi (Nấm tự nhiên)",
-                confidence = 0.91f,
-                isSelected = false
-            )
-        )
-    }
-
     fun onObjectsTracked(boxes: List<TrackedBoundingBox>, latency: Int) {
         _inferenceLatencyMs.value = latency.coerceAtLeast(10)
+        _detectorState.value = if (boxes.isEmpty()) DetectorState.NoObjects else DetectorState.Tracking
         val currentSelectedId = _selectedTrackId.value
 
         if (boxes.isNotEmpty()) {
@@ -182,20 +161,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _trackedObjects.value = updated
             _detectedSpecies.value = validSelectedId?.let { _boxSpeciesMap.value[it] }
         } else {
-            if (currentSelectedId != null && ++missedLockedTargetFrames > TARGET_LOCK_MISSED_FRAME_TIMEOUT) {
-                _selectedTrackId.value = null
-                lockedTargetRect = null
-                missedLockedTargetFrames = 0
-            }
-            // Giữ lại các candidate boxes nếu camera chưa phát hiện được vật thể mới
-            val current = _trackedObjects.value.ifEmpty { getDefaultCandidateBoxes() }
-            _trackedObjects.value = current.map { box ->
-                box.copy(
-                    isSelected = (box.id == _selectedTrackId.value),
-                    identifiedSpecies = _boxSpeciesMap.value[box.id]
-                )
-            }
+            _trackedObjects.value = emptyList()
+            _selectedTrackId.value = null
+            _detectedSpecies.value = null
+            lockedTargetRect = null
+            missedLockedTargetFrames = 0
         }
+    }
+
+    fun onDetectorError(error: Throwable) {
+        _detectorState.value = DetectorState.Error(error)
+        _trackedObjects.value = emptyList()
+        _selectedTrackId.value = null
+        lockedTargetRect = null
+        missedLockedTargetFrames = 0
     }
 
     /**

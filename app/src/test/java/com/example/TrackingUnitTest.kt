@@ -18,6 +18,29 @@ import kotlin.math.abs
 class TrackingUnitTest {
 
     @Test
+    fun emptyDetectorResultDoesNotCreateOrRetainSelectableTargets() {
+        val viewModel = MainViewModel(RuntimeEnvironment.getApplication())
+        assertTrue(viewModel.trackedObjects.value.isEmpty())
+
+        val detected = TrackedBoundingBox(
+            id = 7,
+            normalizedRect = RectF(0.2f, 0.2f, 0.8f, 0.8f),
+            label = "Organism",
+            confidence = 0.9f
+        )
+        viewModel.onObjectsTracked(listOf(detected), 12)
+        viewModel.selectTrack(detected.id)
+        assertEquals(detected.id, viewModel.selectedTrackId.value)
+
+        viewModel.onObjectsTracked(emptyList(), 11)
+
+        assertTrue(viewModel.trackedObjects.value.isEmpty())
+        assertEquals(null, viewModel.selectedTrackId.value)
+        viewModel.selectNextTrack()
+        assertEquals(null, viewModel.selectedTrackId.value)
+    }
+
+    @Test
     fun testTrackedBoundingBoxModel() {
         val rect = RectF(0.2f, 0.3f, 0.7f, 0.8f)
         val box = TrackedBoundingBox(

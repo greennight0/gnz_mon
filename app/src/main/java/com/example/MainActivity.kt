@@ -117,6 +117,7 @@ fun MysteriesOfNatureApp(
     val customApiKey by viewModel.customApiKey.collectAsState()
     val isSettingsOpen by viewModel.isSettingsOpen.collectAsState()
     val trackedObjects by viewModel.trackedObjects.collectAsState()
+    val detectorState by viewModel.detectorState.collectAsState()
     val selectedTrackId by viewModel.selectedTrackId.collectAsState()
     val recognitionError by viewModel.recognitionError.collectAsState()
     val scanState by viewModel.scanState.collectAsState()
@@ -227,6 +228,7 @@ fun MysteriesOfNatureApp(
                     onObjectsTracked = { boxes, latency ->
                         viewModel.onObjectsTracked(boxes, latency)
                     },
+                    onDetectorError = viewModel::onDetectorError,
                     onImageCaptured = { bitmap ->
                         selectedTrackId?.let { viewModel.analyzeImage(ScanRequest(it, bitmap)) }
                             ?: viewModel.requireTargetSelection()
@@ -249,6 +251,7 @@ fun MysteriesOfNatureApp(
                     scanThumbnail = scanThumbnail,
                     language = language,
                     trackedObjects = trackedObjects,
+                    detectorState = detectorState,
                     selectedTrackId = selectedTrackId,
                     onSelectTrack = { trackId -> viewModel.selectTrack(trackId) },
                     onSpeciesClick = { species ->

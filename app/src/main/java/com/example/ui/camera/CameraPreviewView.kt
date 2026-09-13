@@ -224,6 +224,7 @@ fun CameraPreviewView(
     isTorchEnabled: Boolean = false,
     onControllerReady: (CameraController) -> Unit,
     onObjectsTracked: (List<TrackedBoundingBox>, Int) -> Unit = { _, _ -> },
+    onDetectorError: (Exception) -> Unit = {},
     onImageCaptured: (Bitmap) -> Unit,
     onError: (Exception) -> Unit
 ) {
@@ -285,13 +286,13 @@ fun CameraPreviewView(
                     .setTargetResolution(Size(640, 480))
                     .build()
 
-                val engine = createDetectorEngine(context, onError)
+                val engine = createDetectorEngine(context, onDetectorError)
                 val analyzer = ObjectDetectorAnalyzer(
                     engine = engine,
                     onObjectsTracked = { boxes, latency, imageProxy ->
                         onObjectsTracked(mapBoxesToPreview(boxes, imageProxy, previewView), latency)
                     },
-                    onDetectionError = onError
+                    onDetectionError = onDetectorError
                 )
                 cameraController.currentAnalyzer?.close()
                 cameraController.currentAnalyzer = analyzer
