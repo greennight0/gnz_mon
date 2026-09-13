@@ -396,6 +396,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 reportRecognitionError(e)
             } finally {
                 _isAnalyzing.value = false
+                // Completed/failed UI does not render the crop; release its strong bitmap reference.
+                _scanThumbnail.value = null
                 runningTrackIds.remove(targetId)
             }
         }

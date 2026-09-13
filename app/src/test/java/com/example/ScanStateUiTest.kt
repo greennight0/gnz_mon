@@ -43,7 +43,7 @@ class ScanStateUiTest {
             if (viewModel.scanState.value is ScanState.Failed) return@repeat
             delay(10)
         }
-        assertTrue(viewModel.scanThumbnail.value === thumbnail)
+        assertEquals(null, viewModel.scanThumbnail.value)
         assertTrue(viewModel.scanState.value is ScanState.Failed)
     }
 

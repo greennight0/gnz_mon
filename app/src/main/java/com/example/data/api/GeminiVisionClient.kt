@@ -2,6 +2,7 @@ package com.example.data.api
 
 import android.graphics.Bitmap
 import android.util.Base64
+import android.util.Base64OutputStream
 import android.util.Log
 import com.example.BuildConfig
 import com.example.data.model.ConservationStatus
@@ -19,8 +20,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.net.SocketTimeoutException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -56,9 +57,13 @@ class GeminiVisionClient {
             }
 
             // Downscale bitmap if too large to ensure fast transmission
-            val scaledBitmap = scaleBitmapToMax(bitmap, 1024)
             onPhase(ScanTransportPhase.ENCODING)
-            val base64Image = bitmapToBase64(scaledBitmap)
+            val scaledBitmap = scaleBitmapToMax(bitmap, 1024)
+            val base64Image = try {
+                bitmapToBase64(scaledBitmap)
+            } finally {
+                if (scaledBitmap !== bitmap) scaledBitmap.recycle()
+            }
 
             val prompt = """
                 You are GNZ MON (Mysteria of Natural) expert botanist and zoologist AI.
@@ -313,8 +318,18 @@ class GeminiVisionClient {
     }
 
     private fun bitmapToBase64(bitmap: Bitmap): String {
-        val outputStream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
-        return Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
+        // Stream JPEG directly into Base64 characters. This avoids retaining a JPEG buffer plus
+        // the copy made by ByteArrayOutputStream.toByteArray() alongside the Base64 payload.
+        val encoded = StringBuilder()
+        val characterSink = object : OutputStream() {
+            override fun write(value: Int) { encoded.append((value and 0xff).toChar()) }
+            override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                for (index in offset until offset + length) write(bytes[index].toInt())
+            }
+        }
+        Base64OutputStream(characterSink, Base64.NO_WRAP).use { stream ->
+            check(bitmap.compress(Bitmap.CompressFormat.JPEG, 85, stream)) { "JPEG encoding failed" }
+        }
+        return encoded.toString()
     }
 }
