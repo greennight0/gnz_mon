@@ -54,7 +54,7 @@ class EfficientDetLiteEngine private constructor(
     @Synchronized
     override fun detect(image: ImageProxy): List<TrackedBoundingBox> {
         val rotation = image.imageInfo.rotationDegrees
-        val source = image.toBitmap()
+        val source = runDetectorStage(DetectorStage.IMAGE_TO_BITMAP) { image.toBitmap() }
         var detectorBitmap = source
         try {
             if (rotation != 0) {
@@ -63,22 +63,21 @@ class EfficientDetLiteEngine private constructor(
             }
             // BitmapImageBuilder does not own detectorBitmap. Both the MediaPipe image and any
             // per-frame source bitmap remain valid until synchronous detect() has returned.
-            val result = BitmapImageBuilder(detectorBitmap).build().use { mpImage ->
+            val mpImage = runDetectorStage(DetectorStage.MP_IMAGE_CREATION) {
+                BitmapImageBuilder(detectorBitmap).build()
+            }
+            val result = mpImage.use {
                 try {
-                    detector.detect(mpImage)
-                } catch (error: Exception) {
-                    // Most exceptions here describe just this frame (for example an invalid
-                    // bitmap) and CameraX can safely continue with the next image. Only promote
-                    // the well-known closed TaskRunner state; a closed native runner cannot be
-                    // made usable by supplying different input.
-                    if (error.isClosedDetectorRuntime()) {
-                        throw PermanentDetectorException("Object detector runtime is closed", error)
+                    runDetectorStage(DetectorStage.DETECTOR_DETECT) { detector.detect(mpImage) }
+                } catch (error: DetectorStageException) {
+                    if (error.hasPermanentRuntimeCause()) {
+                        throw PermanentDetectorException(
+                            "Object detector runtime is unavailable",
+                            error,
+                            error.stage
+                        )
                     }
                     throw error
-                } catch (error: LinkageError) {
-                    // An ABI/JNI mismatch is permanent for this process. Do not catch Error as a
-                    // whole: OutOfMemoryError must not be converted into a recoverable frame error.
-                    throw PermanentDetectorException("Incompatible detector runtime or ABI", error)
                 }
             }
             return tracker.update(
@@ -89,15 +88,6 @@ class EfficientDetLiteEngine private constructor(
             // engine-owned and reused; only the per-frame source is released here.
             source.recycle()
         }
-    }
-
-    private fun Exception.isClosedDetectorRuntime(): Boolean {
-        val details = generateSequence<Throwable>(this) { it.cause }
-            .joinToString(" ") { it.message.orEmpty() }
-            .lowercase()
-        return details.contains("task runner is currently not running") ||
-            details.contains("task runner has been closed") ||
-            details.contains("object detector has been closed")
     }
 
     private fun obtainRotatedBuffer(source: Bitmap, rotation: Int): Bitmap {
