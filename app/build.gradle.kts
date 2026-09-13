@@ -138,23 +138,13 @@ androidComponents {
       if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString()
     }
     val modelFile = layout.projectDirectory.file("src/main/assets/$detectorModelAsset")
-    val validateModel = tasks.register("validate${capitalizedVariant}DetectorModel") {
+    val validateModel = tasks.register<ValidateDetectorModelTask>(
+      "validate${capitalizedVariant}DetectorModel",
+    ) {
       group = "verification"
       description = "Validates the MediaPipe detector model before ${variant.name} assets are merged."
-      inputs.file(modelFile)
-      doLast {
-        val file = modelFile.asFile
-        check(file.isFile) { "Detector model is missing or is not a regular file: ${file.path}" }
-        check(file.length() > minimumDetectorModelBytes) {
-          "Detector model is only ${file.length()} bytes (minimum: $minimumDetectorModelBytes): ${file.path}"
-        }
-        val prefix = file.inputStream().buffered().use { input ->
-          ByteArray(128).also { input.read(it) }.decodeToString()
-        }
-        check(!prefix.startsWith("version https://git-lfs.github.com/spec/v1")) {
-          "Detector model is a Git LFS pointer rather than model data: ${file.path}"
-        }
-      }
+      this.modelFile.set(modelFile)
+      minimumByteCount.set(minimumDetectorModelBytes)
     }
 
     tasks.matching { it.name == "merge${capitalizedVariant}Assets" }.configureEach {
