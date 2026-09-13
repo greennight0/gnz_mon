@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.AppLanguage
+import com.example.data.model.RecognitionResult
 import com.example.data.model.SpeciesCategory
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
@@ -92,6 +93,7 @@ import kotlin.math.min
 fun ScannerOverlay(
     modifier: Modifier = Modifier,
     detectedSpecies: SpeciesInfo?,
+    notOrganism: RecognitionResult.NotOrganism? = null,
     isAnalyzing: Boolean,
     language: AppLanguage,
     trackedObjects: List<TrackedBoundingBox> = emptyList(),
@@ -691,6 +693,12 @@ fun ScannerOverlay(
                     onNextTrackClick = onNextTrack,
                     onDismissClick = onDismissSpecies
                 )
+            } else if (notOrganism != null) {
+                NotOrganismTag(
+                    result = notOrganism,
+                    language = language,
+                    onRescanClick = onRescanTarget
+                )
             }
 
             // 4.3 Big Shutter / Capture Button
@@ -764,6 +772,51 @@ fun ScannerOverlay(
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.Medium
             )
+        }
+    }
+}
+
+@Composable
+private fun NotOrganismTag(
+    result: RecognitionResult.NotOrganism,
+    language: AppLanguage,
+    onRescanClick: () -> Unit
+) {
+    val isVi = language == AppLanguage.VIETNAMESE
+    Surface(
+        modifier = Modifier.fillMaxWidth().testTag("not_organism_message"),
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xF2071933),
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, AmberGlow)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = if (isVi) "Đây không phải sinh vật tự nhiên" else "This is not a living organism",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp
+            )
+            Text(
+                text = "${result.label} • ${result.confidence}%",
+                color = AmberGlow,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+            )
+            Surface(
+                modifier = Modifier.clickable(onClick = onRescanClick).testTag("rescan_non_organism"),
+                shape = RoundedCornerShape(10.dp),
+                color = CyberCyan
+            ) {
+                Text(
+                    text = if (isVi) "Quét lại" else "Scan again",
+                    color = Color(0xFF002244),
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
+                )
+            }
         }
     }
 }
