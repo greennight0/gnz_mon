@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertDoesNotExist
+import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -62,15 +63,18 @@ class TrackSelectorTest {
         setOverlayContent { lastSelectedId = it }
 
         composeRule.onNodeWithTag("track_selector_bar").assertDoesNotExist()
+        composeRule.onNodeWithTag("capture_button").assertDoesNotExist()
         composeRule.onNodeWithTag("box_header_tag_42")
             .assertContentDescriptionEquals("Mục tiêu Nature Specimen (Mẫu vật)")
             .performClick()
             .assertIsSelected()
+        composeRule.onNodeWithTag("capture_button").assertExists()
         assertEquals(42, lastSelectedId)
 
         composeRule.onNodeWithTag("box_header_tag_42")
             .performClick()
             .assertIsNotSelected()
+        composeRule.onNodeWithTag("capture_button").assertDoesNotExist()
         assertEquals(null, lastSelectedId)
     }
 
@@ -79,15 +83,18 @@ class TrackSelectorTest {
         var lastSelectedId: Int? = null
         setOverlayContent { lastSelectedId = it }
 
+        composeRule.onNodeWithTag("capture_button").assertDoesNotExist()
         composeRule.onNodeWithTag("bounding_box_target_42")
             .assertContentDescriptionEquals("Mục tiêu Nature Specimen (Mẫu vật)")
             .performClick()
             .assertIsSelected()
+        composeRule.onNodeWithTag("capture_button").assertExists()
         assertEquals(42, lastSelectedId)
 
         composeRule.onNodeWithTag("bounding_box_target_42")
             .performClick()
             .assertIsNotSelected()
+        composeRule.onNodeWithTag("capture_button").assertDoesNotExist()
         assertEquals(null, lastSelectedId)
     }
 }

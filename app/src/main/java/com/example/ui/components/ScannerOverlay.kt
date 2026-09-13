@@ -753,50 +753,52 @@ fun ScannerOverlay(
             }
 
             // 5.3 Big Shutter / Capture Button
-            Box(
-                modifier = Modifier
-                    .size(74.dp)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(CyberCyan.copy(alpha = 0.4f * pulseGlow), Color.Transparent)
-                        )
-                    )
-                    .clickable(onClick = onCaptureClick)
-                    .testTag("capture_button"),
-                contentAlignment = Alignment.Center
-            ) {
+            if (selectedTrackId != null) {
                 Box(
                     modifier = Modifier
-                        .size(64.dp)
+                        .size(74.dp)
                         .clip(CircleShape)
-                        .background(Color(0xCC071426))
-                        .border(3.dp, if (detectedSpecies != null) NeonEmerald else CyberCyan, CircleShape),
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(CyberCyan.copy(alpha = 0.4f * pulseGlow), Color.Transparent)
+                            )
+                        )
+                        .clickable(onClick = onCaptureClick)
+                        .testTag("capture_button"),
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(64.dp)
                             .clip(CircleShape)
-                            .background(
-                                if (detectedSpecies != null) Brush.linearGradient(listOf(NeonEmerald, Color(0xFF00796B)))
-                                else Brush.linearGradient(listOf(CyberCyan, MysticBlue50))
-                            ),
+                            .background(Color(0xCC071426))
+                            .border(3.dp, if (detectedSpecies != null) NeonEmerald else CyberCyan, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (isAnalyzing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                color = Color.White,
-                                strokeWidth = 3.dp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = if (detectedSpecies != null) Icons.Filled.Refresh else Icons.Filled.PhotoCamera,
-                                contentDescription = if (detectedSpecies != null) "Rescan Species" else "Scan Species",
-                                tint = Color.White,
-                                modifier = Modifier.size(26.dp)
-                            )
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (detectedSpecies != null) Brush.linearGradient(listOf(NeonEmerald, Color(0xFF00796B)))
+                                    else Brush.linearGradient(listOf(CyberCyan, MysticBlue50))
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isAnalyzing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = Color.White,
+                                    strokeWidth = 3.dp
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = if (detectedSpecies != null) Icons.Filled.Refresh else Icons.Filled.PhotoCamera,
+                                    contentDescription = if (detectedSpecies != null) "Rescan Species" else "Scan Species",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
                         }
                     }
                 }
