@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
+data class ScanRequest(val trackId: Int, val croppedBitmap: Bitmap)
+
 private const val TARGET_LOCK_MISSED_FRAME_TIMEOUT = 3
 private const val TARGET_LOCK_MIN_IOU = 0.20f
 private const val TARGET_LOCK_MAX_CENTER_DISTANCE = 0.12f
@@ -59,6 +61,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _recognitionError = MutableStateFlow<Throwable?>(null)
     val recognitionError: StateFlow<Throwable?> = _recognitionError.asStateFlow()
+
+    private val _targetSelectionRequired = MutableStateFlow(false)
+    val targetSelectionRequired: StateFlow<Boolean> = _targetSelectionRequired.asStateFlow()
 
     private val _notOrganism = MutableStateFlow<RecognitionResult.NotOrganism?>(null)
     val notOrganism: StateFlow<RecognitionResult.NotOrganism?> = _notOrganism.asStateFlow()
@@ -302,37 +307,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _detectedSpecies.value = null
     }
 
-    fun analyzeImage(bitmap: Bitmap) {
+    fun analyzeImage(request: ScanRequest) {
+        val targetId = request.trackId
         viewModelScope.launch {
             _isAnalyzing.value = true
             _recognitionError.value = null
             _notOrganism.value = null
             _detectedSpecies.value = null // Xóa kết quả cũ ngay lập tức để hiển thị HUD quét laser
             try {
-                // Tối ưu hóa: Nếu có Bounding Box đang được chọn/theo dõi, crop chính xác vùng mục tiêu
-                val targetBox = _trackedObjects.value.find { it.id == _selectedTrackId.value }
-                    ?: _trackedObjects.value.find { it.isSelected }
-                    ?: _trackedObjects.value.firstOrNull()
-
-                val imageToAnalyze = if (targetBox != null) {
-                    cropBitmapToNormalizedRect(bitmap, targetBox.normalizedRect)
-                } else {
-                    bitmap
-                }
-
-                when (val result = repository.identifyImage(imageToAnalyze, _customApiKey.value.takeIf { it.isNotBlank() })) {
+                // The bitmap and ID are one immutable click-time request; do not re-read tracking.
+                when (val result = repository.identifyImage(request.croppedBitmap, _customApiKey.value.takeIf { it.isNotBlank() })) {
                     is RecognitionResult.Organism -> {
                         _detectedSpecies.value = result.species
-                        if (targetBox != null) {
-                            _boxSpeciesMap.value = _boxSpeciesMap.value + (targetBox.id to result.species)
+                        run {
+                            _boxSpeciesMap.value = _boxSpeciesMap.value + (targetId to result.species)
                             _trackedObjects.value = _trackedObjects.value.map { box ->
-                                if (box.id == targetBox.id) box.copy(identifiedSpecies = result.species) else box
+                                if (box.id == targetId) box.copy(identifiedSpecies = result.species) else box
                             }
                         }
                     }
                     is RecognitionResult.NotOrganism -> {
                         _notOrganism.value = result
-                        clearSpeciesForTarget(targetBox?.id)
+                        clearSpeciesForTarget(targetId)
                     }
                     is RecognitionResult.Failure -> reportRecognitionError(result.error)
                 }
@@ -354,22 +350,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _detectedSpecies.value = null
     }
 
-    private fun cropBitmapToNormalizedRect(bitmap: Bitmap, rect: RectF): Bitmap {
-        return try {
-            val left = (rect.left * bitmap.width).toInt().coerceIn(0, bitmap.width - 2)
-            val top = (rect.top * bitmap.height).toInt().coerceIn(0, bitmap.height - 2)
-            val right = (rect.right * bitmap.width).toInt().coerceIn(left + 2, bitmap.width)
-            val bottom = (rect.bottom * bitmap.height).toInt().coerceIn(top + 2, bitmap.height)
-            val width = right - left
-            val height = bottom - top
-            if (width > 40 && height > 40) {
-                Bitmap.createBitmap(bitmap, left, top, width, height)
-            } else {
-                bitmap
-            }
-        } catch (e: Exception) {
-            bitmap
-        }
+    fun clearTargetSelectionRequired() {
+        _targetSelectionRequired.value = false
+    }
+
+    fun requireTargetSelection() {
+        _targetSelectionRequired.value = true
     }
 
     fun openSpeciesDetail(species: SpeciesInfo) {
