@@ -10,7 +10,9 @@ import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTopPositionInRootIsEqualTo
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
@@ -55,6 +57,18 @@ class TrackSelectorTest {
                 onCaptureClick = {}
             )
         }
+    }
+
+    @Test
+    fun topSectionDoesNotReserveSpaceForRemovedTelemetryBar() {
+        setOverlayContent {}
+
+        composeRule.onNodeWithTag("ai_telemetry_hud_bar").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Toggle Algorithm").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Technology Info").assertDoesNotExist()
+        composeRule.onNodeWithTag("app_brand_badge")
+            .assertExists()
+            .assertTopPositionInRootIsEqualTo(36.dp)
     }
 
     @Test

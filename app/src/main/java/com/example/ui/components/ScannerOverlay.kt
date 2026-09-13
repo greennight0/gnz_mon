@@ -39,18 +39,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.SwapHoriz
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -89,11 +85,10 @@ import com.example.ui.theme.NeonEmerald
 import kotlin.math.min
 
 /**
- * ScannerOverlay: Giao diện Khung nhận diện & Khung theo dõi đối tượng (Bounding Box / Object Tracking Box)
- * Tích hợp công nghệ thị giác máy tính & AI:
- * - Mô hình phát hiện đối tượng: YOLO (You Only Look Once) / SSD (Single Shot MultiBox Detector)
- * - Thuật toán theo dõi: DeepSORT (Kalman Filter + Re-ID) / BYTETracker (IOU Association)
- * - Hiển thị Bounding Box thời gian thực kèm Tracking ID, Vectơ vận tốc, nhãn phân loại và AI Telemetry.
+ * ScannerOverlay: Giao diện khung nhận diện và theo dõi đối tượng theo thời gian thực.
+ *
+ * Hiển thị bounding box, mã theo dõi, vectơ vận tốc, nhãn phân loại cùng các thao tác
+ * chọn mục tiêu, chụp ảnh và điều khiển máy quét.
  */
 @Composable
 fun ScannerOverlay(
@@ -104,8 +99,6 @@ fun ScannerOverlay(
     trackedObjects: List<TrackedBoundingBox> = emptyList(),
     selectedTrackId: Int? = null,
     activeAlgorithm: TrackingAlgorithm = TrackingAlgorithm.YOLO_BYTE_TRACKER,
-    inferenceLatencyMs: Int = 16,
-    onAlgorithmToggle: () -> Unit = {},
     onSelectTrack: (Int?) -> Unit = {},
     onSpeciesClick: (SpeciesInfo) -> Unit,
     onCaptureClick: () -> Unit,
@@ -119,8 +112,6 @@ fun ScannerOverlay(
 ) {
     val isVi = language == AppLanguage.VIETNAMESE
     val density = LocalDensity.current
-    var showTechDialog by remember { mutableStateOf(false) }
-
     // Pulse transition for tracking breathing animation
     val infiniteTransition = rememberInfiniteTransition(label = "tracking_pulse")
     val pulseGlow by infiniteTransition.animateFloat(
@@ -551,7 +542,7 @@ fun ScannerOverlay(
             }
         }
 
-        // 3. TOP SECTION: Brand Badge + Action Controls (Flash, EN/VI, SNS) + AI Telemetry HUD Bar
+        // 3. TOP SECTION: Brand Badge + Action Controls (Flash, EN/VI, SNS)
         // Xếp chung trong 1 Column giúp các phần tử KHÔNG BAO GIỜ lồng hay đè lên nhau
         Column(
             modifier = Modifier
@@ -624,86 +615,9 @@ fun ScannerOverlay(
                     )
                 }
             }
-
-            // 4. AI VISION & DEEP LEARNING TELEMETRY HUD BAR (YOLO/SSD + BYTETracker)
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = Color(0xE6051528),
-                border = androidx.compose.foundation.BorderStroke(1.dp, CyberCyan.copy(alpha = 0.5f)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("ai_telemetry_hud_bar")
-            ) {
-                Row(
-                    modifier = Modifier
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                        .fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    // Algorithm switcher chip
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(CyberCyan.copy(alpha = 0.15f))
-                            .clickable(onClick = onAlgorithmToggle)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.SwapHoriz,
-                            contentDescription = "Toggle Algorithm",
-                            tint = CyberCyan,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(5.dp))
-                        Text(
-                            text = activeAlgorithm.titleEn,
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    // Telemetry metrics (Latency, FPS, Tracks count)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "${inferenceLatencyMs}ms",
-                            color = NeonEmerald,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "•",
-                            color = Color.White.copy(alpha = 0.4f),
-                            fontSize = 10.sp
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "${trackedObjects.size} Tracks",
-                            color = LaserCyan,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        IconButton(
-                            onClick = { showTechDialog = true },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Info,
-                                contentDescription = "Technology Info",
-                                tint = CyberCyan,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                }
-            }
         }
 
-        // 5. BOTTOM SECTION: Species Info Tag (nếu có) / Active Target HUD + Capture Trigger
+        // 4. BOTTOM SECTION: Species Info Tag (nếu có) / Active Target HUD + Capture Trigger
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -712,7 +626,7 @@ fun ScannerOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // 5.1 Scanning Animation State
+            // 4.1 Scanning Animation State
             if (isAnalyzing) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
@@ -741,7 +655,7 @@ fun ScannerOverlay(
                     }
                 }
             } else if (detectedSpecies != null) {
-                // 5.2 Identified Species Tag (với nút Xem chi tiết, Quét lại)
+                // 4.2 Identified Species Tag (với nút Xem chi tiết, Quét lại)
                 InteractiveSpeciesTag(
                     species = detectedSpecies,
                     language = language,
@@ -752,7 +666,7 @@ fun ScannerOverlay(
                 )
             }
 
-            // 5.3 Big Shutter / Capture Button
+            // 4.3 Big Shutter / Capture Button
             if (selectedTrackId != null) {
                 Box(
                     modifier = Modifier
@@ -824,73 +738,6 @@ fun ScannerOverlay(
                 fontWeight = FontWeight.Medium
             )
         }
-    }
-
-    // Technology Explanation Dialog (YOLO, SSD, DeepSORT, BYTETracker)
-    if (showTechDialog) {
-        AlertDialog(
-            onDismissRequest = { showTechDialog = false },
-            confirmButton = {
-                TextButton(onClick = { showTechDialog = false }) {
-                    Text(text = if (isVi) "Đã hiểu" else "Got it", color = CyberCyan, fontWeight = FontWeight.Bold)
-                }
-            },
-            title = {
-                Text(
-                    text = if (isVi) "Kiến trúc Thị giác máy tính & AI Tracking" else "Computer Vision & AI Tracking Architecture",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = if (isVi)
-                            "1. Object Detection (Tầng phát hiện Bounding Box):"
-                        else
-                            "1. Object Detection (Bounding Box Layer):",
-                        color = CyberCyan,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (isVi)
-                            "• YOLO (You Only Look Once): Mô hình one-stage detector xử lý toàn bộ ảnh trong 1 lần duyệt mạng, đạt tốc độ 30-60+ FPS.\n• SSD (Single Shot MultiBox Detector): Mô hình di động tối ưu hoá tài nguyên trên thiết bị qua MobileNet."
-                        else
-                            "• YOLO: High-speed one-stage detector predicting bounding boxes in a single forward pass.\n• SSD: MobileNet-based lightweight detector optimized for mobile edge devices.",
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontSize = 12.sp
-                    )
-                    Text(
-                        text = if (isVi)
-                            "2. Multi-Object Tracking (Tầng theo dõi bám vết):"
-                        else
-                            "2. Multi-Object Tracking (MOT Layer):",
-                        color = NeonEmerald,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (isVi)
-                            "• BYTETracker: Tận dụng liên kết IOU cả hộp tin cậy cao và thấp, giảm thiểu mất dấu khi vật thể bị che khuất.\n• DeepSORT: Sử dụng Bộ lọc Kalman ước lượng quỹ đạo vận tốc kết hợp Deep Re-ID trích xuất đặc trưng nhận dạng."
-                        else
-                            "• BYTETracker: Associates both high and low score boxes using motion similarity to prevent track loss.\n• DeepSORT: Combines Kalman Filter trajectory prediction with deep appearance descriptors.",
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontSize = 12.sp
-                    )
-                    Text(
-                        text = if (isVi)
-                            "3. Cloud Multi-modal AI (Gemini Vision):\nĐịnh danh chính xác tên khoa học, họ sinh học và đặc tính bí ẩn từ vùng Bounding Box được chọn."
-                        else
-                            "3. Cloud Multi-modal AI (Gemini Vision):\nIdentifies exact binomial scientific nomenclature and mysterious adaptations from the cropped bounding box.",
-                        color = AmberGlow,
-                        fontSize = 12.sp
-                    )
-                }
-            },
-            containerColor = Color(0xFF071933)
-        )
     }
 }
 
