@@ -14,6 +14,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -57,9 +58,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
@@ -178,6 +181,35 @@ fun ScannerOverlay(
             modifier = Modifier
                 .fillMaxSize()
                 .testTag("bounding_box_canvas")
+                .pointerInput(trackedObjects, selectedTrackId, screenW, screenH) {
+                    detectTapGestures { tapPosition ->
+                        val normalizedTap = Offset(
+                            x = tapPosition.x / screenW,
+                            y = tapPosition.y / screenH
+                        )
+                        val hitBox = trackedObjects
+                            .sortedWith(
+                                compareByDescending<TrackedBoundingBox> {
+                                    it.id == selectedTrackId
+                                }.thenBy {
+                                    it.normalizedRect.width() * it.normalizedRect.height()
+                                }
+                            )
+                            .firstOrNull { box ->
+                                normalizedTap.x >= box.normalizedRect.left &&
+                                    normalizedTap.x <= box.normalizedRect.right &&
+                                    normalizedTap.y >= box.normalizedRect.top &&
+                                    normalizedTap.y <= box.normalizedRect.bottom
+                            }
+
+                        when {
+                            hitBox != null -> onSelectTrack(
+                                if (hitBox.id == selectedTrackId) null else hitBox.id
+                            )
+                            selectedTrackId != null -> onSelectTrack(null)
+                        }
+                    }
+                }
         ) {
             // Khi có đối tượng được phát hiện từ Object Detection & Tracking pipeline
             // Khung lớn vẽ trước, khung nhỏ vẽ sau, khung đang chọn vẽ trên cùng để không bị đè che
@@ -344,8 +376,8 @@ fun ScannerOverlay(
 
         }
 
-        // Transparent hit targets follow the same stacking order as the rendered boxes:
-        // larger boxes first, then smaller boxes, with the selected box always on top.
+        // Invisible semantics targets keep boxes accessible to keyboard and test actions.
+        // Physical taps are handled once by the canvas pointer input above.
         if (trackedObjects.isNotEmpty()) {
             val sortedForHitTargets = trackedObjects.sortedWith(
                 compareBy<TrackedBoundingBox> { box ->
@@ -381,9 +413,10 @@ fun ScannerOverlay(
                             } else {
                                 "Target ${box.label}"
                             }
-                        }
-                        .clickable {
-                            onSelectTrack(if (isSelected) null else box.id)
+                            onClick {
+                                onSelectTrack(if (isSelected) null else box.id)
+                                true
+                            }
                         }
                 )
             }
