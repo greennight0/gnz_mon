@@ -67,7 +67,8 @@ dependencies {
   implementation(libs.androidx.camera.core)
   implementation(libs.androidx.camera.lifecycle)
   implementation(libs.androidx.camera.view)
-  implementation(libs.mlkit.objectdetection)
+  // The sole production detector runtime. Gemini remains species recognition, not detection.
+  implementation(libs.mediapipe.tasks.vision)
   implementation(libs.androidx.compose.material.icons.core)
   implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.androidx.compose.material3)
