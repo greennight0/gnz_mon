@@ -96,6 +96,29 @@ class ObjectDetectorAnalyzerStressTest {
         assertEquals(8, closes)
     }
 
+    @Test fun `telemetry identifies stage count and frame shape without frame data`() {
+        val telemetry = mutableListOf<DetectorTelemetry>()
+        val analyzer = ObjectDetectorAnalyzer(
+            engine = ObjectDetectorEngine {
+                throw DetectorStageException(
+                    DetectorStage.MP_IMAGE_CREATION, "failed", IllegalArgumentException()
+                )
+            },
+            onObjectsTracked = { _, _, _ -> },
+            onDetectionTelemetry = { error, failures, image ->
+                telemetry += detectorTelemetry(error, failures, image)
+            },
+            minimumInferenceIntervalMs = 0
+        )
+
+        analyzer.analyze(imageProxy(rotation = 90, width = 640, height = 480, format = 35) {})
+
+        assertEquals(
+            DetectorTelemetry(DetectorStage.MP_IMAGE_CREATION, 1, 640, 480, 35, 90),
+            telemetry.single()
+        )
+    }
+
     @Test fun `failure threshold becomes actionable view model error`() {
         val viewModel = MainViewModel(ApplicationProvider.getApplicationContext())
         val analyzer = ObjectDetectorAnalyzer(
@@ -187,7 +210,13 @@ class ObjectDetectorAnalyzerStressTest {
         assertEquals(20, closes)
     }
 
-    private fun imageProxy(rotation: Int, onClose: () -> Unit): ImageProxy {
+    private fun imageProxy(
+        rotation: Int,
+        width: Int = 0,
+        height: Int = 0,
+        format: Int = 0,
+        onClose: () -> Unit
+    ): ImageProxy {
         val imageInfo = proxy<ImageInfo> { method ->
             when (method) {
                 "getRotationDegrees" -> rotation
@@ -198,7 +227,9 @@ class ObjectDetectorAnalyzerStressTest {
         return proxy { method ->
             when (method) {
                 "getImageInfo" -> imageInfo
-                "getWidth", "getHeight", "getFormat" -> 0
+                "getWidth" -> width
+                "getHeight" -> height
+                "getFormat" -> format
                 "getPlanes" -> emptyArray<ImageProxy.PlaneProxy>()
                 "getCropRect" -> android.graphics.Rect()
                 "close" -> onClose()

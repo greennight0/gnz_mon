@@ -10,6 +10,7 @@ class ObjectDetectorAnalyzer(
     private val engine: ObjectDetectorEngine,
     private val onObjectsTracked: (List<TrackedBoundingBox>, Int, ImageProxy) -> Unit,
     private val onDetectionError: (Exception) -> Unit = {},
+    private val onDetectionTelemetry: (Exception, Int, ImageProxy) -> Unit = { _, _, _ -> },
     private val consecutiveFailureThreshold: Int = DEFAULT_CONSECUTIVE_FAILURE_THRESHOLD,
     private val minimumInferenceIntervalMs: Long = 100L,
     private val clockMillis: () -> Long = System::currentTimeMillis
@@ -38,22 +39,24 @@ class ObjectDetectorAnalyzer(
             // Bad image data applies only to this frame. Keep the analyzer alive and retain the
             // count for retry policy. An explicitly classified runtime/model failure or too many
             // consecutive bad frames pauses inference until CameraPreviewView replaces this analyzer.
+            consecutiveFrameFailures++
             val reportedError = if (error is PermanentDetectorException) {
                 detectorFailedPermanently = true
                 error
             } else {
-                consecutiveFrameFailures++
                 if (consecutiveFrameFailures >= consecutiveFailureThreshold) {
                     detectorFailedPermanently = true
                     PermanentDetectorException(
                         "Object detector failed for $consecutiveFrameFailures consecutive frames",
-                        error
+                        error,
+                        error.detectorStage
                     )
                 } else {
                     error
                 }
             }
             Log.w(TAG, "Offline object detection failed", reportedError)
+            onDetectionTelemetry(reportedError, consecutiveFrameFailures, image)
             onDetectionError(reportedError)
         } finally {
             image.close()
@@ -69,4 +72,39 @@ class ObjectDetectorAnalyzer(
 }
 
 /** Signals that the detector engine, rather than one input frame, must be recreated. */
-class PermanentDetectorException(message: String, cause: Throwable? = null) : Exception(message, cause)
+enum class DetectorStage { IMAGE_TO_BITMAP, MP_IMAGE_CREATION, DETECTOR_DETECT, UNKNOWN }
+
+/** Associates a failure with a pipeline stage without retaining any frame contents. */
+open class DetectorStageException(
+    val stage: DetectorStage,
+    message: String,
+    cause: Throwable
+) : Exception(message, cause)
+
+internal inline fun <T> runDetectorStage(stage: DetectorStage, operation: () -> T): T = try {
+    operation()
+} catch (error: DetectorStageException) {
+    throw error
+} catch (error: Exception) {
+    throw DetectorStageException(stage, "Detector stage $stage failed", error)
+} catch (error: LinkageError) {
+    // LinkageError is the only Error deliberately converted: OOM and other VM errors propagate.
+    throw PermanentDetectorException("Incompatible detector runtime or ABI", error, stage)
+}
+
+/** Prefer throwable types supplied by MediaPipe/JNI over brittle localized message matching. */
+internal fun Throwable.hasPermanentRuntimeCause(): Boolean =
+    generateSequence(this) { it.cause }.any { cause ->
+        cause is LinkageError || cause is IllegalStateException ||
+            (cause.javaClass.name.startsWith("com.google.mediapipe.") && cause !is IllegalArgumentException)
+    }
+
+internal val Throwable.detectorStage: DetectorStage
+    get() = generateSequence(this) { it.cause }
+        .filterIsInstance<DetectorStageException>().firstOrNull()?.stage ?: DetectorStage.UNKNOWN
+
+class PermanentDetectorException(
+    message: String,
+    cause: Throwable? = null,
+    val stage: DetectorStage = cause?.detectorStage ?: DetectorStage.UNKNOWN
+) : Exception(message, cause)

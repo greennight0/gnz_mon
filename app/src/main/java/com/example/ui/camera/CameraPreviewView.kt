@@ -48,13 +48,35 @@ import com.example.BuildConfig
 
 enum class TargetImageSource { PREVIEW_VIEW, IMAGE_CAPTURE }
 
-/** Records detector diagnostics only. Frame pixels and image metadata are deliberately excluded. */
-internal fun logDetectorFailure(error: Throwable, temporary: Boolean) {
+/** Non-sensitive diagnostics: dimensions/layout only, never planes, pixels, or image bytes. */
+internal data class DetectorTelemetry(
+    val stage: DetectorStage,
+    val consecutiveFailures: Int,
+    val frameWidth: Int,
+    val frameHeight: Int,
+    val frameFormat: Int,
+    val frameRotationDegrees: Int
+)
+
+internal fun detectorTelemetry(error: Throwable, failures: Int, image: ImageProxy) = DetectorTelemetry(
+    error.detectorStage, failures, image.width, image.height, image.format,
+    image.imageInfo.rotationDegrees
+)
+
+internal fun logDetectorFailure(error: Throwable, temporary: Boolean, telemetry: DetectorTelemetry? = null) {
     val root = generateSequence(error) { it.cause }.last()
     val message = buildString {
         append("detector_failure temporary=").append(temporary)
         append(" exception=").append(error.javaClass.name)
         append(" root_cause=").append(root.javaClass.name)
+        telemetry?.let {
+            append(" stage=").append(it.stage)
+            append(" consecutive_failures=").append(it.consecutiveFailures)
+            append(" frame_width=").append(it.frameWidth)
+            append(" frame_height=").append(it.frameHeight)
+            append(" frame_format=").append(it.frameFormat)
+            append(" frame_rotation=").append(it.frameRotationDegrees)
+        }
         append(" model_asset=").append(BuildConfig.DETECTOR_MODEL_ASSET)
         append(" manufacturer=").append(Build.MANUFACTURER)
         append(" model=").append(Build.MODEL)
@@ -372,7 +394,6 @@ fun CameraPreviewView(
                             }
                         },
                         onDetectionError = { error ->
-                            logDetectorFailure(error, temporary = error !is PermanentDetectorException)
                             ContextCompat.getMainExecutor(context).execute {
                                 onDetectorError(error)
                                 if (error is PermanentDetectorException &&
@@ -383,6 +404,13 @@ fun CameraPreviewView(
                                     cameraController.removeFailedAnalyzer(imageAnalysis, analyzer)
                                 }
                             }
+                        },
+                        onDetectionTelemetry = { error, failures, image ->
+                            logDetectorFailure(
+                                error,
+                                temporary = error !is PermanentDetectorException,
+                                detectorTelemetry(error, failures, image)
+                            )
                         }
                     )
                     cameraController.replaceAnalyzer(imageAnalysis, analyzer)

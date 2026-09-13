@@ -4,6 +4,7 @@ import android.graphics.RectF
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -12,6 +13,23 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class EfficientDetEngineTest {
+    @Test fun failuresAreAttributedToEveryDetectorPipelineStage() {
+        DetectorStage.values().filter { it != DetectorStage.UNKNOWN }.forEach { stage ->
+            try {
+                runDetectorStage(stage) { throw IllegalArgumentException("synthetic") }
+                fail("Expected failure for $stage")
+            } catch (error: DetectorStageException) {
+                assertEquals(stage, error.stage)
+                assertTrue(error.cause is IllegalArgumentException)
+            }
+        }
+    }
+
+    @Test fun runtimeClassificationUsesCauseTypeInsteadOfMessage() {
+        assertTrue(IllegalStateException("localized or empty").hasPermanentRuntimeCause())
+        assertTrue(!IllegalArgumentException("task runner has been closed").hasPermanentRuntimeCause())
+    }
+
     @Test fun packagedModelCanBeLoadedFromAssets() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         context.assets.open(EfficientDetLiteEngine.MODEL_ASSET).use { input ->
