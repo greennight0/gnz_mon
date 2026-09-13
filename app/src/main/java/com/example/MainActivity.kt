@@ -178,21 +178,25 @@ fun MysteriesOfNatureApp(
         val clickRect = clickTrackId?.let { id ->
             trackedObjects.firstOrNull { it.id == id }?.normalizedRect?.let(::android.graphics.RectF)
         }
-        val controller = cameraController
-        val view = controller?.previewView
         if (clickTrackId == null || clickRect == null) {
             viewModel.requireTargetSelection()
-        } else if (controller != null && view != null && view.width > 0 && view.height > 0) {
-            if (!viewModel.beginCapture(clickTrackId, clickRect)) return
-            val previewRect = android.graphics.RectF(
-                clickRect.left * view.width, clickRect.top * view.height,
-                clickRect.right * view.width, clickRect.bottom * view.height
-            )
-            controller.captureTarget(TargetCaptureRequest(clickTrackId, previewRect)) { snapshot ->
-                viewModel.analyzeImage(ScanRequest(snapshot.trackId, snapshot.bitmap, clickRect))
-            }
-        } else {
+            return
+        }
+
+        val controller = cameraController
+        val view = controller?.previewView
+        if (controller == null || view == null || view.width <= 0 || view.height <= 0) {
             viewModel.reportRecognitionError(IllegalStateException("Camera preview is not ready"))
+            return
+        }
+
+        if (!viewModel.beginCapture(clickTrackId, clickRect)) return
+        val previewRect = android.graphics.RectF(
+            clickRect.left * view.width, clickRect.top * view.height,
+            clickRect.right * view.width, clickRect.bottom * view.height
+        )
+        controller.captureTarget(TargetCaptureRequest(clickTrackId, previewRect)) { snapshot ->
+            viewModel.analyzeImage(ScanRequest(snapshot.trackId, snapshot.bitmap, clickRect))
         }
     }
 
