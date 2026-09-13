@@ -70,10 +70,10 @@ class TrackingUnitTest {
         viewModel.onObjectsTracked(mockBoxes, 15)
         assertTrue(viewModel.trackedObjects.value.first { it.id == 2 }.isSelected)
 
-        // The selected track disappears: move selection to the valid object at its old position.
+        // An unrelated detection must not steal the lock at the selected track's old list index.
         viewModel.onObjectsTracked(listOf(mockBoxes.first()), 15)
-        assertEquals(1, viewModel.selectedTrackId.value)
-        assertTrue(viewModel.trackedObjects.value.single().isSelected)
+        assertEquals(2, viewModel.selectedTrackId.value)
+        assertTrue(!viewModel.trackedObjects.value.single().isSelected)
 
         // IDs not present in the current detector output can never become stale selections.
         viewModel.selectTrack(999)
