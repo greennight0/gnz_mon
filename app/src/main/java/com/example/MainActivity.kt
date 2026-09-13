@@ -229,9 +229,6 @@ fun MysteriesOfNatureApp(
                             cameraPermissionState.launchPermissionRequest()
                         }
                     },
-                    onTapCreateOrMoveTarget = { normX, normY ->
-                        viewModel.createOrMoveTargetBox(normX, normY)
-                    },
                     onDismissSpecies = {
                         viewModel.dismissSpeciesTag()
                     },

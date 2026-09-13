@@ -1,6 +1,5 @@
 package com.example.ui.components
 
-import android.graphics.RectF
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -20,8 +19,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,8 +32,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -70,9 +69,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -112,7 +113,6 @@ fun ScannerOverlay(
     onSpeciesClick: (SpeciesInfo) -> Unit,
     onCaptureClick: () -> Unit,
     onRescanTarget: () -> Unit = {},
-    onTapCreateOrMoveTarget: (Float, Float) -> Unit = { _, _ -> },
     onDismissSpecies: () -> Unit = {},
     onNextTrack: () -> Unit = {},
     isTorchEnabled: Boolean = false,
@@ -160,14 +160,6 @@ fun ScannerOverlay(
 
     // User tap-to-track target location (fallback or manual repositioning)
     var userTargetOffset by remember { mutableStateOf<Offset?>(null) }
-    var tapPingOffset by remember { mutableStateOf<Offset?>(null) }
-    
-    val tapPingScale by animateFloatAsState(
-        targetValue = if (tapPingOffset != null) 1f else 0f,
-        animationSpec = tween(450, easing = FastOutSlowInEasing),
-        label = "tap_ping",
-        finishedListener = { tapPingOffset = null }
-    )
 
     BoxWithConstraints(
         modifier = modifier
@@ -198,151 +190,6 @@ fun ScannerOverlay(
             targetValue = defaultCenter.y.coerceIn(minCenterY, maxCenterY),
             animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioLowBouncy),
             label = "fallback_center_y"
-        )
-
-        // Bắt cử chỉ chạm vào Bounding Box để chọn / chạm lần 2 để bỏ chọn
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(trackedObjects, selectedTrackId) {
-                    detectTapGestures { tapOffset ->
-                        tapPingOffset = tapOffset
-
-                            // Kiểm tra các Bounding Box mà điểm chạm tapOffset rơi vào diện tích (bao gồm cả thẻ tên)
-                            val minDimension = 60.dp.toPx()
-                            val badgeHeight = 36.dp.toPx()
-                             
-                            // Velocity-aware tap detection (Phase 3)
-                            // Calculate max velocity from all tracked objects
-                            val maxVelocity = if (trackedObjects.isNotEmpty()) {
-                                trackedObjects.maxOf { box ->
-                                    kotlin.math.sqrt(box.velocityX * box.velocityX + box.velocityY * box.velocityY)
-                                }
-                            } else {
-                                0f
-                            }
-                             
-                            // Kalman prediction: predict bounding box position at tap time
-                            val predictedObjects = trackedObjects.map { box ->
-                                val predX = box.normalizedRect.centerX() + box.velocityX * 0.033f
-                                val predY = box.normalizedRect.centerY() + box.velocityY * 0.033f
-                                val predWidth = box.normalizedRect.width()
-                                val predHeight = box.normalizedRect.height()
-                                box to RectF(
-                                    predX - predWidth / 2f,
-                                    predY - predHeight / 2f,
-                                    predX + predWidth / 2f,
-                                    predY + predHeight / 2f
-                                )
-                            }
-                             
-                            // Velocity scale for adaptive padding (1.0 to 2.5x)
-                            val velocityScale = (1f + maxVelocity * 2.5f).coerceIn(1f, 2.5f)
-                             
-                            // A 48dp baseline accounts for the fingertip occluding the target.
-                            val baseHitPadding = 48.dp.toPx()
-                            val hitPadding = baseHitPadding * velocityScale
-                             
-                            // If a fingertip misses the box, use a generous nearest-neighbour
-                            // target. This deliberately does not depend on a small edge radius.
-                            val snappingRadius = 160.dp.toPx() * velocityScale
-
-                            // Danh sách các box mà điểm chạm nằm trong diện tích của nó (bao gồm hitPadding)
-                            // Using Kalman-predicted positions for more accurate tap detection
-                            val directHitBoxes = predictedObjects.filter { (box, predRect) ->
-                                val left = predRect.left * size.width
-                                val top = predRect.top * size.height
-                                val rawRight = predRect.right * size.width
-                                val rawBottom = predRect.bottom * size.height
-                                val right = maxOf(rawRight, left + minDimension)
-                                val bottom = maxOf(rawBottom, top + minDimension)
-
-                                tapOffset.x in (left - hitPadding)..(right + hitPadding) &&
-                                tapOffset.y in (top - badgeHeight - hitPadding)..(bottom + hitPadding)
-                            }.map { it.first }
-
-                            // Sticky Selection / Target Snapping (Hút điểm chạm thông minh):
-                            // Nếu không chạm lọt hẳn vào trong khung, tính khoảng cách từ điểm chạm đến tâm hoặc mép hình chữ nhật gần nhất
-                            // Bán kính hút chạm R = dynamic based on velocity (giúp chọn mục tiêu cực nhạy và dứt khoát trên điện thoại cầm tay)
-                            val hitBoxes = if (directHitBoxes.isNotEmpty()) {
-                                directHitBoxes
-                            } else {
-                                val nearest = predictedObjects.mapNotNull { (box, predRect) ->
-                                    val left = predRect.left * size.width
-                                    val top = predRect.top * size.height
-                                    val rawRight = predRect.right * size.width
-                                    val rawBottom = predRect.bottom * size.height
-                                    val right = maxOf(rawRight, left + minDimension)
-                                    val bottom = maxOf(rawBottom, top + minDimension)
-
-                                    // Khoảng cách từ tapOffset tới mép khung hình chữ nhật
-                                    val dx = when {
-                                        tapOffset.x < left -> left - tapOffset.x
-                                        tapOffset.x > right -> tapOffset.x - right
-                                        else -> 0f
-                                    }
-                                    val dy = when {
-                                        tapOffset.y < (top - badgeHeight) -> (top - badgeHeight) - tapOffset.y
-                                        tapOffset.y > bottom -> tapOffset.y - bottom
-                                        else -> 0f
-                                    }
-                                    val edgeDist = kotlin.math.hypot(dx, dy)
-
-                                    // Khoảng cách Euclidean tới tâm của box
-                                    val centerX = (left + right) / 2f
-                                    val centerY = (top + bottom) / 2f
-                                    val centerDist = kotlin.math.hypot(tapOffset.x - centerX, tapOffset.y - centerY)
-
-                                    val effectiveDist = minOf(edgeDist, centerDist * 0.75f)
-                                    if (effectiveDist <= snappingRadius) Pair(box, effectiveDist) else null
-                                }.minByOrNull { it.second }?.first
-
-                                if (nearest != null) listOf(nearest) else emptyList()
-                            }
-
-                             if (hitBoxes.isNotEmpty()) {
-                                 if (hitBoxes.size == 1) {
-                                     // Chỉ chạm trúng 1 box duy nhất
-                                     val singleBox = hitBoxes.first()
-                                     if (selectedTrackId == singleBox.id) {
-                                         onSelectTrack(null) // Chạm lần 2: Bỏ chọn
-                                     } else {
-                                         onSelectTrack(singleBox.id) // Chọn box
-                                     }
-                                 } else {
-                                    // Chạm vào vùng lồng nhau giữa NHIỀU box:
-                                    // Nếu box hiện tại đang được chọn nằm trong các box lồng nhau này:
-                                    // Chuyển luân phiên sang box kế tiếp trong cụm lồng nhau;
-                                    // nếu đã đi hết vòng các box lồng nhau thì bỏ chọn!
-                                    val currentIndex = hitBoxes.indexOfFirst { it.id == selectedTrackId }
-                                    if (currentIndex >= 0) {
-                                        if (currentIndex + 1 < hitBoxes.size) {
-                                            // Chuyển sang box lồng nhau tiếp theo
-                                            onSelectTrack(hitBoxes[currentIndex + 1].id)
-                                        } else {
-                                            // Đã duyệt hết các box lồng nhau: Bỏ chọn
-                                            onSelectTrack(null)
-                                        }
-                                    } else {
-                                        // Chưa có box nào trong cụm được chọn:
-                                        // Ưu tiên chọn box có diện tích nhỏ hơn trước (focus chính xác vật thể bên trong)
-                                        // hoặc box gần tâm điểm chạm nhất
-                                        val bestBox = hitBoxes.minByOrNull { box ->
-                                            val bWidth = maxOf(box.normalizedRect.width() * size.width, minDimension)
-                                            val bHeight = maxOf(box.normalizedRect.height() * size.height, minDimension)
-                                            bWidth * bHeight
-                                        } ?: hitBoxes.first()
-                                        onSelectTrack(bestBox.id)
-                                    }
-                                }
-                            } else {
-                                // Chạm ra ngoài khoảng trống hoàn toàn: Bỏ chọn nếu đang có khung được chọn
-                                if (selectedTrackId != null) {
-                                    onSelectTrack(null)
-                                }
-                            }
-                    }
-                }
         )
 
         // 1. BOUNDING BOX & OBJECT TRACKING CANVAS
@@ -514,17 +361,6 @@ fun ScannerOverlay(
                 }
             }
 
-            // Tap-to-Track Animated Ping Ring
-            tapPingOffset?.let { pingPos ->
-                val pingRadius = (20.dp.toPx() + 30.dp.toPx() * tapPingScale)
-                val pingAlpha = (1f - tapPingScale).coerceIn(0f, 1f)
-                drawCircle(
-                    color = LaserCyan.copy(alpha = pingAlpha * 0.8f),
-                    radius = pingRadius,
-                    center = pingPos,
-                    style = Stroke(width = 1.8.dp.toPx())
-                )
-            }
         }
 
         // 2. ATTACHED TRACKING BADGES (Hiển thị thẻ Tracking ID & nhãn phân loại trên từng Bounding Box)
@@ -553,13 +389,6 @@ fun ScannerOverlay(
                 Box(
                     modifier = Modifier
                         .offset { IntOffset(bLeft, bTop) }
-                        .clickable {
-                            if (selectedTrackId == box.id) {
-                                onSelectTrack(null)
-                            } else {
-                                onSelectTrack(box.id)
-                            }
-                        }
                         .testTag("box_header_tag_${box.id}")
                 ) {
                     Surface(
@@ -830,6 +659,14 @@ fun ScannerOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            TrackSelectorBar(
+                trackedObjects = trackedObjects,
+                selectedTrackId = selectedTrackId,
+                isVietnamese = isVi,
+                onSelectTrack = onSelectTrack,
+                onNextTrack = onNextTrack
+            )
+
             // 5.1 Scanning Animation State
             if (isAnalyzing) {
                 Surface(
@@ -924,15 +761,15 @@ fun ScannerOverlay(
             Text(
                 text = if (isVi) {
                     when {
-                        detectedSpecies != null -> "Nhấn nút để quét lại mục tiêu • Chạm khung khác để quét tiếp"
-                        selectedTrackId != null -> "Đã chọn khung #${selectedTrackId} • Chạm lại để bỏ chọn"
-                        else -> "Chạm Bounding Box để chọn mục tiêu • Chạm lần 2 để bỏ chọn"
+                        detectedSpecies != null -> "Nhấn nút để quét lại • Chọn chip khác để đổi mục tiêu"
+                        selectedTrackId != null -> "Đã chọn mục tiêu #${selectedTrackId} • Chạm lại chip để bỏ chọn"
+                        else -> "Chọn mục tiêu từ thanh bên trên"
                     }
                 } else {
                     when {
-                        detectedSpecies != null -> "Tap button to rescan target • Tap another box to scan next"
-                        selectedTrackId != null -> "Box #${selectedTrackId} selected • Tap again to deselect"
-                        else -> "Tap Bounding Box to select • Tap 2nd time to deselect"
+                        detectedSpecies != null -> "Tap to rescan • Choose another chip for the next target"
+                        selectedTrackId != null -> "Target #${selectedTrackId} selected • Tap its chip to deselect"
+                        else -> "Choose a target from the selector above"
                     }
                 },
                 color = Color.White.copy(alpha = 0.75f),
@@ -1007,6 +844,82 @@ fun ScannerOverlay(
             },
             containerColor = Color(0xFF071933)
         )
+    }
+}
+
+/** Fixed, camera-position-independent target picker with stable accessibility targets. */
+@Composable
+internal fun TrackSelectorBar(
+    trackedObjects: List<TrackedBoundingBox>,
+    selectedTrackId: Int?,
+    isVietnamese: Boolean,
+    onSelectTrack: (Int?) -> Unit,
+    onNextTrack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (trackedObjects.isEmpty()) return
+
+    Row(
+        modifier = modifier.fillMaxWidth().testTag("track_selector_bar"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        LazyRow(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(trackedObjects, key = { it.id }) { box ->
+                val isSelected = selectedTrackId == box.id
+                val targetNumber = trackedObjects.indexOf(box) + 1
+                Surface(
+                    onClick = { onSelectTrack(if (isSelected) null else box.id) },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isSelected) AmberGlow.copy(alpha = 0.28f) else Color(0xE6051528),
+                    border = androidx.compose.foundation.BorderStroke(
+                        if (isSelected) 2.dp else 1.dp,
+                        if (isSelected) AmberGlow else LaserCyan.copy(alpha = 0.7f)
+                    ),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("track_selector_${box.id}")
+                        .semantics {
+                            selected = isSelected
+                            contentDescription = if (isVietnamese) {
+                                "Chọn mục tiêu số $targetNumber"
+                            } else {
+                                "Select target number $targetNumber"
+                            }
+                        }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "#${box.id}  ${box.label}",
+                            color = if (isSelected) AmberGlow else Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "${(box.confidence * 100).toInt()}% confidence",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 9.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+        IconButton(
+            onClick = onNextTrack,
+            modifier = Modifier.size(48.dp).testTag("next_track_button").semantics {
+                contentDescription = if (isVietnamese) "Mục tiêu kế tiếp" else "Next target"
+            }
+        ) {
+            Icon(Icons.Filled.SwapHoriz, contentDescription = null, tint = CyberCyan)
+        }
     }
 }
 

@@ -23,7 +23,6 @@ class CameraPermissionContentTest {
     @Test
     fun deniedPermission_requestButtonIsNotBlockedByScannerOverlay() {
         var permissionRequestCount = 0
-        var targetTapCount = 0
 
         composeTestRule.setContent {
             CameraPermissionContent(
@@ -36,8 +35,7 @@ class CameraPermissionContentTest {
                     isAnalyzing = false,
                     language = AppLanguage.ENGLISH,
                     onSpeciesClick = {},
-                    onCaptureClick = {},
-                    onTapCreateOrMoveTarget = { _, _ -> targetTapCount++ }
+                    onCaptureClick = {}
                 )
             }
         }
@@ -47,6 +45,5 @@ class CameraPermissionContentTest {
         composeTestRule.onNodeWithTag("request_camera_permission_button").performClick()
 
         assertEquals(1, permissionRequestCount)
-        assertEquals(0, targetTapCount)
     }
 }
