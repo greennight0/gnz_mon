@@ -14,6 +14,7 @@ import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
 import com.example.data.model.DetectorState
 import com.example.data.model.DetectorErrorType
+import com.example.data.model.DetectorStage
 import com.example.data.model.ScanException
 import com.example.data.model.ScanFailureReason
 import com.example.data.model.ScanState
@@ -31,6 +32,7 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import kotlin.math.sqrt
 import com.example.ui.camera.IncompatibleDetectorRuntimeException
+import com.example.ui.camera.DetectorStageException
 import com.example.ui.camera.PermanentDetectorException
 import com.example.ui.camera.RecoverableDetectorInitializationException
 
@@ -43,6 +45,11 @@ data class ScanRequest(
 private const val TARGET_LOCK_MISSED_FRAME_TIMEOUT = 3
 private const val TARGET_LOCK_MIN_IOU = 0.20f
 private const val TARGET_LOCK_MAX_CENTER_DISTANCE = 0.12f
+
+private data class DetectorErrorClassification(
+    val type: DetectorErrorType,
+    val stage: DetectorStage
+)
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -177,23 +184,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onDetectorError(error: Throwable) {
-        val type = classifyDetectorError(error)
+        val (type, stage) = classifyDetectorError(error)
         if (type == DetectorErrorType.FRAME_TEMPORARY) {
             // A malformed frame is already closed by the analyzer. Keep detection running and
             // avoid presenting a blocking retry flow for an issue the next frame can resolve.
-            _detectorState.value = DetectorState.FrameError(error, type)
+            _detectorState.value = DetectorState.FrameError(error, type, stage)
             return
         }
-        _detectorState.value = DetectorState.Error(error, type)
+        _detectorState.value = DetectorState.Error(error, type, stage)
         _trackedObjects.value = emptyList()
         _selectedTrackId.value = null
         lockedTargetRect = null
         missedLockedTargetFrames = 0
     }
 
-    private fun classifyDetectorError(error: Throwable): DetectorErrorType {
+    private fun classifyDetectorError(error: Throwable): DetectorErrorClassification {
         val chain = generateSequence(error) { it.cause }.toList()
-        return when {
+        val type = when {
             chain.any { it is IncompatibleDetectorRuntimeException || it is LinkageError } ->
                 DetectorErrorType.INCOMPATIBLE_RUNTIME
             chain.any { it is RecoverableDetectorInitializationException } ->
@@ -201,6 +208,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             chain.any { it is PermanentDetectorException } -> DetectorErrorType.UNKNOWN
             else -> DetectorErrorType.FRAME_TEMPORARY
         }
+        val stage = chain.filterIsInstance<DetectorStageException>().firstOrNull()?.stage
+            ?: chain.filterIsInstance<PermanentDetectorException>().firstOrNull()?.stage
+            ?: DetectorStage.UNKNOWN
+        return DetectorErrorClassification(type, stage)
     }
 
 

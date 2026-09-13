@@ -5,6 +5,7 @@ import androidx.camera.core.ImageInfo
 import androidx.camera.core.ImageProxy
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.DetectorState
+import com.example.data.model.DetectorStage
 import com.example.ui.MainViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -35,6 +36,27 @@ class ObjectDetectorAnalyzerStressTest {
 
         assertEquals(listOf("error"), callbacks)
         assertTrue(viewModel.detectorState.value is DetectorState.FrameError)
+        assertEquals(
+            DetectorStage.UNKNOWN,
+            (viewModel.detectorState.value as DetectorState.FrameError).stage
+        )
+    }
+
+    @Test fun `view model preserves every detector stage in frame errors`() {
+        val viewModel = MainViewModel(ApplicationProvider.getApplicationContext())
+
+        listOf(
+            DetectorStage.IMAGE_TO_BITMAP,
+            DetectorStage.MP_IMAGE_CREATION,
+            DetectorStage.DETECTOR_DETECT
+        ).forEach { stage ->
+            viewModel.onDetectorError(
+                DetectorStageException(stage, "sensitive $stage details", IllegalArgumentException())
+            )
+
+            val state = viewModel.detectorState.value as DetectorState.FrameError
+            assertEquals(stage, state.stage)
+        }
     }
 
     @Test fun `permanent detector failure pauses subsequent inference`() {
@@ -134,7 +156,8 @@ class ObjectDetectorAnalyzerStressTest {
         analyzer.analyze(imageProxy(0) {})
         assertTrue(viewModel.detectorState.value is DetectorState.FrameError)
         analyzer.analyze(imageProxy(0) {})
-        assertTrue(viewModel.detectorState.value is DetectorState.Error)
+        val error = viewModel.detectorState.value as DetectorState.Error
+        assertEquals(DetectorStage.UNKNOWN, error.stage)
     }
 
     @Test fun `successful inference resets consecutive frame failure count`() {

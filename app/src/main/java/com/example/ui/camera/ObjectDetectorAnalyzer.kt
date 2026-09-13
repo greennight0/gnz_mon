@@ -1,5 +1,7 @@
 package com.example.ui.camera
 
+import com.example.data.model.DetectorStage
+
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -70,9 +72,6 @@ class ObjectDetectorAnalyzer(
         const val DEFAULT_CONSECUTIVE_FAILURE_THRESHOLD = 3
     }
 }
-
-/** Signals that the detector engine, rather than one input frame, must be recreated. */
-enum class DetectorStage { IMAGE_TO_BITMAP, MP_IMAGE_CREATION, DETECTOR_DETECT, UNKNOWN }
 
 /** Associates a failure with a pipeline stage without retaining any frame contents. */
 open class DetectorStageException(
