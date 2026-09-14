@@ -21,6 +21,7 @@ import com.example.ui.ScanRequest
 import com.example.ui.components.ScannerOverlay
 import com.example.ui.components.detectorStageCode
 import com.example.ui.camera.DetectorStageException
+import com.example.ui.camera.CameraAnalysisInitializationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
@@ -89,6 +90,29 @@ class ScanStateUiTest {
         setDetectorState(DetectorState.Error(IllegalArgumentException("private details"), DetectorErrorType.INVALID_MODEL))
         composeRule.onNodeWithTag("detector_status_guidance")
             .assertTextEquals("The detector model is invalid or missing.", "Retry detector")
+        composeRule.onNodeWithTag("retry_detector_button").assertExists()
+    }
+
+    @Test fun `detector ready leaves startup state explicitly`() {
+        val viewModel = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
+
+        assertEquals(DetectorState.NotReady, viewModel.detectorState.value)
+        viewModel.onDetectorReady()
+
+        assertEquals(DetectorState.NoObjects, viewModel.detectorState.value)
+    }
+
+    @Test fun `camera analysis startup failure replaces startup guidance with retry`() {
+        val viewModel = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
+        viewModel.onDetectorError(CameraAnalysisInitializationException("first frame timed out"))
+
+        val errorState = viewModel.detectorState.value as DetectorState.Error
+        assertEquals(DetectorErrorType.UNKNOWN, errorState.type)
+        assertEquals(DetectorStage.CAMERA_ANALYSIS, errorState.stage)
+        setDetectorState(errorState)
+        composeRule.onNodeWithTag("detector_status_guidance")
+            .assertTextEquals("The detector encountered an unknown error. [CAM-ANALYSIS]", "Retry detector")
+        composeRule.onNodeWithText("Detector is starting…").assertDoesNotExist()
         composeRule.onNodeWithTag("retry_detector_button").assertExists()
     }
 

@@ -45,8 +45,62 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.BuildConfig
+
+internal const val FIRST_ANALYSIS_FRAME_TIMEOUT_MS = 5_000L
+
+internal data class CameraUseCaseBindResult<T>(
+    val camera: T,
+    val analysisBound: Boolean,
+    val detectorError: CameraAnalysisInitializationException? = null
+)
+
+/** Keeps preview fallback available without representing it as a working detector pipeline. */
+internal fun <T> bindCameraUseCases(
+    bindWithAnalysis: () -> T,
+    bindPreviewFallback: () -> T
+): CameraUseCaseBindResult<T> = try {
+    CameraUseCaseBindResult(bindWithAnalysis(), analysisBound = true)
+} catch (analysisError: Exception) {
+    CameraUseCaseBindResult(
+        camera = bindPreviewFallback(),
+        analysisBound = false,
+        detectorError = CameraAnalysisInitializationException(
+            "CameraX could not bind the ImageAnalysis use case",
+            analysisError
+        )
+    )
+}
+
+/** One-shot guard for devices which bind ImageAnalysis but never deliver an analyzer frame. */
+internal class FirstAnalysisFrameWatchdog(
+    private val timeoutMillis: Long = FIRST_ANALYSIS_FRAME_TIMEOUT_MS,
+    private val onTimeout: (CameraAnalysisInitializationException) -> Unit
+) {
+    private val completed = AtomicBoolean(false)
+    private var timeoutJob: Job? = null
+
+    fun start(scope: CoroutineScope) {
+        if (completed.get()) return
+        timeoutJob = scope.launch {
+            delay(timeoutMillis)
+            if (completed.compareAndSet(false, true)) {
+                onTimeout(CameraAnalysisInitializationException(
+                    "ImageAnalysis did not deliver its first frame within ${timeoutMillis}ms"
+                ))
+            }
+        }
+    }
+
+    fun onFirstFrame() {
+        if (completed.compareAndSet(false, true)) timeoutJob?.cancel()
+    }
+}
 
 enum class TargetImageSource { PREVIEW_VIEW, IMAGE_CAPTURE }
 
@@ -384,12 +438,20 @@ fun CameraPreviewView(
                     .setTargetResolution(Size(640, 480))
                     .build()
 
+                val firstFrameWatchdog = if (engine !== DisabledObjectDetectorEngine) {
+                    FirstAnalysisFrameWatchdog { error ->
+                        logDetectorFailure(error, temporary = false)
+                        cameraController.replaceAnalyzer(imageAnalysis, null)
+                        onDetectorError(error)
+                    }
+                } else null
                 if (engine !== DisabledObjectDetectorEngine) {
                     val replacementRequested = AtomicBoolean(false)
                     lateinit var analyzer: ObjectDetectorAnalyzer
                     analyzer = ObjectDetectorAnalyzer(
                         engine = engine,
                         onObjectsTracked = { boxes, latency, imageProxy ->
+                            firstFrameWatchdog?.onFirstFrame()
                             val mapped = mapBoxesToPreview(boxes, imageProxy, previewView)
                             ContextCompat.getMainExecutor(context).execute {
                                 onObjectsTracked(mapped, latency)
@@ -416,7 +478,6 @@ fun CameraPreviewView(
                         }
                     )
                     cameraController.replaceAnalyzer(imageAnalysis, analyzer)
-                    onDetectorReady()
                 } else {
                     cameraController.replaceAnalyzer(imageAnalysis, null)
                 }
@@ -429,25 +490,37 @@ fun CameraPreviewView(
 
                 provider.unbindAll()
 
-                val camera = try {
-                    provider.bindToLifecycle(
-                        lifecycleOwner,
-                        cameraSelector,
-                        preview,
-                        imageCapture,
-                        imageAnalysis
-                    )
-                } catch (bindEx: Exception) {
-                    Log.w("CameraPreviewView", "ImageAnalysis binding fallback", bindEx)
-                    provider.bindToLifecycle(
-                        lifecycleOwner,
-                        cameraSelector,
-                        preview,
-                        imageCapture
-                    )
+                val bindResult = bindCameraUseCases(
+                    bindWithAnalysis = {
+                        provider.bindToLifecycle(
+                            lifecycleOwner,
+                            cameraSelector,
+                            preview,
+                            imageCapture,
+                            imageAnalysis
+                        )
+                    },
+                    bindPreviewFallback = {
+                        provider.bindToLifecycle(
+                            lifecycleOwner,
+                            cameraSelector,
+                            preview,
+                            imageCapture
+                        )
+                    }
+                )
+
+                if (bindResult.analysisBound && engine !== DisabledObjectDetectorEngine) {
+                    onDetectorReady()
+                    firstFrameWatchdog?.start(this)
+                } else if (!bindResult.analysisBound) {
+                    val detectorError = checkNotNull(bindResult.detectorError)
+                    Log.w("CameraPreviewView", "ImageAnalysis binding fallback", detectorError)
+                    cameraController.replaceAnalyzer(imageAnalysis, null)
+                    onDetectorError(detectorError)
                 }
 
-                cameraController.camera = camera
+                cameraController.camera = bindResult.camera
                 cameraController.toggleTorch(isTorchEnabled)
         } catch (e: Exception) {
             Log.e("CameraPreviewView", "Failed to bind camera use cases", e)

@@ -139,8 +139,12 @@ internal val Throwable.detectorStage: DetectorStage
     get() = generateSequence(this) { it.cause }
         .filterIsInstance<DetectorStageException>().firstOrNull()?.stage ?: DetectorStage.UNKNOWN
 
-class PermanentDetectorException(
+open class PermanentDetectorException(
     message: String,
     cause: Throwable? = null,
     val stage: DetectorStage = cause?.detectorStage ?: DetectorStage.UNKNOWN
 ) : Exception(message, cause)
+
+/** A pipeline-level failure which requires CameraX use cases to be rebound. */
+class CameraAnalysisInitializationException(message: String, cause: Throwable? = null) :
+    PermanentDetectorException(message, cause, DetectorStage.CAMERA_ANALYSIS)

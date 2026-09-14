@@ -23,7 +23,7 @@ sealed interface DetectorState {
 }
 
 /** Stable detector pipeline stage. Safe to persist and display as a diagnostic code. */
-enum class DetectorStage { IMAGE_TO_BITMAP, MP_IMAGE_CREATION, DETECTOR_DETECT, UNKNOWN }
+enum class DetectorStage { CAMERA_ANALYSIS, IMAGE_TO_BITMAP, MP_IMAGE_CREATION, DETECTOR_DETECT, UNKNOWN }
 
 /** Stable, UI-safe detector failure classification; exception messages are telemetry-only. */
 enum class DetectorErrorType {

@@ -102,6 +102,7 @@ private const val MAX_VELOCITY_PADDING_DP = 24f
 internal const val FRAME_ERROR_DISPLAY_MILLIS = 1_000L
 
 internal fun detectorStageCode(stage: DetectorStage): String = when (stage) {
+    DetectorStage.CAMERA_ANALYSIS -> "CAM-ANALYSIS"
     DetectorStage.IMAGE_TO_BITMAP -> "CAM-FRAME"
     DetectorStage.MP_IMAGE_CREATION -> "MP-IMAGE"
     DetectorStage.DETECTOR_DETECT -> "MP-DETECT"

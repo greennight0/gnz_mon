@@ -216,9 +216,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
 
     fun onDetectorReady() {
-        if (_detectorState.value is DetectorState.Error) {
-            _detectorState.value = DetectorState.NotReady
-        }
+        // A bound analysis pipeline is operational even before its first (possibly empty) result.
+        // Never leave the overlay indefinitely displaying the startup-only state.
+        _detectorState.value = DetectorState.NoObjects
     }
 
     /**
