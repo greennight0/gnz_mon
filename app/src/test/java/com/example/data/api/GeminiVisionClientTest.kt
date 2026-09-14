@@ -1,14 +1,15 @@
 package com.example.data.api
 
 import android.graphics.Bitmap
-import androidx.test.core.app.ApplicationProvider
-import com.example.data.local.AppDatabase
 import com.example.data.model.RecognitionResult
 import com.example.data.model.ScanException
 import com.example.data.model.ScanFailureReason
-import com.example.data.repository.SpeciesRepository
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -64,16 +65,33 @@ class GeminiVisionClientTest {
     }
 
     @Test
-    fun `missing api key returns failure and does not persist a random species`() = runBlocking {
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        AppDatabase.getDatabase(context).speciesDao().clearAll()
-        val repository = SpeciesRepository(context)
+    fun `image request is sent to configured backend without api key`() = runBlocking {
+        var capturedRequest: Request? = null
+        val httpClient = OkHttpClient.Builder().addInterceptor { chain ->
+            capturedRequest = chain.request()
+            response(chain.request(), 200, apiResponse(listOf(validOrganismJson())))
+        }.build()
+        val backendClient = GeminiVisionClient("https://backend.example/v1/identify", httpClient)
         val bitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
 
-        val result = repository.identifyImage(bitmap, " ")
+        val result = backendClient.identifyFloraOrFauna(bitmap)
 
-        assertFailure(result, ScanFailureReason.MissingApiKey)
-        assertTrue(repository.discoveredSpeciesFlow.first().isEmpty())
+        assertTrue(result is RecognitionResult.Organism)
+        assertEquals("https://backend.example/v1/identify", capturedRequest?.url.toString())
+        assertEquals(null, capturedRequest?.url?.query)
+        val payload = capturedRequest?.body?.let { body ->
+            okio.Buffer().also(body::writeTo).readUtf8()
+        }.orEmpty()
+        assertTrue(payload.contains("inlineData"))
+        assertTrue(payload.contains("image/jpeg"))
+    }
+
+    @Test fun `authentication error from backend is retained`() = runBlocking {
+        assertBackendFailure(401)
+    }
+
+    @Test fun `server error from backend is retained`() = runBlocking {
+        assertBackendFailure(503)
     }
 
     @Test fun `http status is retained`() = assertFailure(
@@ -177,6 +195,24 @@ class GeminiVisionClientTest {
         assertTrue(result is RecognitionResult.Failure)
         assertEquals(expected, ((result as RecognitionResult.Failure).error as ScanException).reason)
     }
+
+    private suspend fun assertBackendFailure(statusCode: Int) {
+        val httpClient = OkHttpClient.Builder().addInterceptor { chain ->
+            response(chain.request(), statusCode, "backend error")
+        }.build()
+        val bitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
+        val result = GeminiVisionClient("https://backend.example/v1/identify", httpClient)
+            .identifyFloraOrFauna(bitmap)
+        assertFailure(result, ScanFailureReason.Http(statusCode))
+    }
+
+    private fun response(request: Request, code: Int, body: String) = Response.Builder()
+        .request(request)
+        .protocol(Protocol.HTTP_1_1)
+        .code(code)
+        .message(body)
+        .body(body.toResponseBody())
+        .build()
 
     private fun assertNotOrganism(label: String, confidence: Int) {
         val result = client.parseSpeciesJson(

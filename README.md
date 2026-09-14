@@ -87,12 +87,12 @@ Các thành phần được khai báo và sử dụng trong ứng dụng gồm:
 
 | Thành phần | Vai trò |
 | --- | --- |
-| Kotlin, Android Gradle Plugin, KSP, Secrets Gradle Plugin | Ngôn ngữ, build, sinh mã Room và đưa biến cấu hình vào `BuildConfig` |
+| Kotlin, Android Gradle Plugin, KSP | Ngôn ngữ, build và sinh mã Room |
 | Jetpack Compose + Material 3 | Giao diện khai báo và overlay camera |
 | CameraX (`camera-core`, `camera-camera2`, `camera-lifecycle`, `camera-view`) | Preview, phân tích frame và chụp ảnh |
 | MediaPipe Tasks Vision `0.10.32` + EfficientDet-Lite0 INT8 | Detection on-device; tracker hình học của ứng dụng cấp ID |
 | Room `2.7.0` | Lưu nhật ký loài trên thiết bị |
-| OkHttp `4.10.0` | Gửi HTTP request trực tiếp tới Gemini API |
+| OkHttp `4.10.0` | Gửi ảnh tới backend GNZ MON; ứng dụng không gọi Gemini trực tiếp |
 | Kotlin Coroutines | Xử lý bất đồng bộ và state |
 | Accompanist Permissions | Yêu cầu quyền camera trong Compose |
 | Robolectric, Roborazzi, JUnit, Compose UI Test | Unit/UI/screenshot testing |
@@ -101,33 +101,24 @@ Phiên bản đầy đủ và danh sách dependency có hiệu lực nằm trong
 `app/build.gradle.kts`. Version catalog còn chứa một số alias hoặc dependency hỗ trợ khác;
 bảng trên chỉ mô tả các thành phần tham gia trực tiếp vào pipeline và chức năng hiện tại.
 
-## Cấu hình Gemini API key
+## Cấu hình endpoint backend Gemini
 
-Dự án dùng Secrets Gradle Plugin, đọc file `.env` ở root và sinh trường
-`BuildConfig.GEMINI_API_KEY`. Không commit API key thật vào Git.
+Android gửi request nhận dạng ảnh tới backend GNZ MON, mặc định là
+`https://api.gnzmon.app/v1/species/identify`. Backend này chịu trách nhiệm xác thực request,
+giữ Gemini API key ở phía máy chủ, gọi Gemini và trả response `generateContent` về ứng dụng.
+Gemini API key không được cấu hình hoặc đóng gói trong APK.
 
-1. Sao chép file mẫu:
+Để dùng một deployment backend khác, đặt Gradle property khi build:
 
-   ```bash
-   cp .env.example .env
-   ```
+```bash
+gradle assembleDebug -PGNZ_MON_BACKEND_ENDPOINT=https://backend.example.com/v1/species/identify
+```
 
-2. Điền key của riêng bạn trong `.env` (giá trị dưới đây chỉ là ví dụ):
-
-   ```properties
-   GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE
-   ```
-
-3. Build ứng dụng:
-
-   ```bash
-   gradle assembleDebug
-   ```
-
-Ứng dụng cũng cho phép truyền `customApiKey` trong runtime; giá trị không rỗng này được ưu
-tiên hơn `BuildConfig.GEMINI_API_KEY`. Placeholder `MY_GEMINI_API_KEY` được xem như chưa cấu
-hình. Lưu ý: key được đóng gói trong ứng dụng client không thể được coi là bí mật tuyệt đối;
-với bản phát hành thực tế nên giới hạn key/quota và cân nhắc proxy backend có kiểm soát.
+Endpoint phải dùng HTTPS, nhận `POST application/json` theo payload Gemini `contents` và
+`generationConfig`, rồi trả nguyên response JSON tương thích Gemini. Các mã lỗi xác thực và
+lỗi backend (ví dụ HTTP 401/403/5xx) được giữ nguyên để ứng dụng hiển thị lỗi phù hợp. Chỉ cấu
+hình URL public ở client; đặt `GEMINI_API_KEY` trong secret manager hoặc biến môi trường của
+dịch vụ backend, không đặt trong `.env`, Gradle property hay `BuildConfig` của Android.
 
 ## Quyền camera
 

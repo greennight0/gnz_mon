@@ -26,36 +26,22 @@ import java.net.SocketTimeoutException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-class GeminiVisionClient {
-
-    private val client = OkHttpClient.Builder()
+class GeminiVisionClient internal constructor(
+    private val backendEndpoint: String = BuildConfig.GNZ_MON_BACKEND_ENDPOINT,
+    private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
+) {
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     suspend fun identifyFloraOrFauna(
         bitmap: Bitmap,
-        customApiKey: String? = null,
         onPhase: (ScanTransportPhase) -> Unit = {}
     ): RecognitionResult = withContext(Dispatchers.IO) {
         try {
-            val apiKey = if (!customApiKey.isNullOrBlank()) {
-                customApiKey
-            } else {
-                try {
-                    BuildConfig::class.java.getField("GEMINI_API_KEY").get(null) as? String ?: ""
-                } catch (e: Exception) {
-                    ""
-                }
-            }
-
-            if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
-                return@withContext failure(ScanFailureReason.MissingApiKey)
-            }
-
             // Downscale bitmap if too large to ensure fast transmission
             onPhase(ScanTransportPhase.ENCODING)
             val scaledBitmap = scaleBitmapToMax(bitmap, 1024)
@@ -129,10 +115,9 @@ class GeminiVisionClient {
                 put("generationConfig", createGenerationConfig())
             }
 
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
             val body = requestJson.toString().toRequestBody(jsonMediaType)
             val request = Request.Builder()
-                .url(url)
+                .url(backendEndpoint)
                 .post(body)
                 .build()
 

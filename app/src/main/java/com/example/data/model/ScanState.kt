@@ -30,7 +30,6 @@ sealed interface ScanState {
 
 /** Stable error categories used by both UI localization and tests. */
 sealed interface ScanFailureReason {
-    data object MissingApiKey : ScanFailureReason
     data class Http(val statusCode: Int) : ScanFailureReason
     data object Timeout : ScanFailureReason
     data object Network : ScanFailureReason

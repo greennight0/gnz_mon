@@ -61,13 +61,11 @@ import com.example.ui.theme.LaserCyan
 fun SettingsSheet(
     language: AppLanguage,
     themeMode: AppThemeMode,
-    customApiKey: String = "",
     socialLinks: List<SocialLink>,
     sheetState: SheetState,
     onDismiss: () -> Unit,
     onLanguageChange: (AppLanguage) -> Unit,
-    onThemeModeChange: (AppThemeMode) -> Unit,
-    onApiKeyChange: (String) -> Unit = {}
+    onThemeModeChange: (AppThemeMode) -> Unit
 ) {
     val context = LocalContext.current
     val isVi = language == AppLanguage.VIETNAMESE
@@ -427,4 +425,3 @@ private fun openUrl(context: Context, url: String) {
         Toast.makeText(context, "Could not open $url", Toast.LENGTH_SHORT).show()
     }
 }
-

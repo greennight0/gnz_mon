@@ -7,13 +7,14 @@ val detectorModelAsset = "models/nature_scope_efficientdet_lite0_int8.tflite"
 val detectorModelManifest = "models/nature_scope_efficientdet_lite0_int8.manifest.json"
 val minimumDetectorModelBytes = 1_000_000L
 val detectorModelSha256 = "0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb"
+val backendEndpoint = providers.gradleProperty("GNZ_MON_BACKEND_ENDPOINT")
+  .orElse("https://api.gnzmon.app/v1/species/identify")
 
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
-  alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
 }
 
@@ -30,6 +31,7 @@ android {
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "DETECTOR_MODEL_ASSET", "\"$detectorModelAsset\"")
+    buildConfigField("String", "GNZ_MON_BACKEND_ENDPOINT", "\"${backendEndpoint.get()}\"")
   }
 
   buildTypes {
@@ -53,14 +55,6 @@ android {
     includeInApk = false
     includeInBundle = true
   }
-}
-
-// Configure the Secrets Gradle Plugin to use .env and .env.example files
-// to match the convention used in Web projects.
-secrets {
-  propertiesFileName = ".env"
-  defaultPropertiesFileName = ".env.example"
-  ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
