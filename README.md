@@ -103,8 +103,8 @@ bảng trên chỉ mô tả các thành phần tham gia trực tiếp vào pipel
 
 ## Cấu hình endpoint backend Gemini
 
-Android gửi request nhận dạng ảnh tới backend GNZ MON, mặc định là
-`https://api.gnzmon.app/v1/species/identify`. Backend này chịu trách nhiệm xác thực request,
+Android debug có endpoint mặc định để thuận tiện phát triển, nhưng build release bắt buộc truyền
+endpoint của deployment thật. Backend tham chiếu trong `backend/server.mjs` chịu trách nhiệm xác thực request,
 giữ Gemini API key ở phía máy chủ, gọi Gemini và trả response `generateContent` về ứng dụng.
 Gemini API key không được cấu hình hoặc đóng gói trong APK.
 
@@ -119,6 +119,12 @@ Endpoint phải dùng HTTPS, nhận `POST application/json` theo payload Gemini 
 lỗi backend (ví dụ HTTP 401/403/5xx) được giữ nguyên để ứng dụng hiển thị lỗi phù hợp. Chỉ cấu
 hình URL public ở client; đặt `GEMINI_API_KEY` trong secret manager hoặc biến môi trường của
 dịch vụ backend, không đặt trong `.env`, Gradle property hay `BuildConfig` của Android.
+
+Backend chạy với Node.js 20+, đọc `GEMINI_API_KEY` duy nhất ở phía máy chủ, cung cấp
+`POST /v1/species/identify` và health check không nhận ảnh tại `GET /healthz`. Pipeline release
+đọc hai biến được bảo vệ `GNZ_MON_BACKEND_ENDPOINT` và `GNZ_MON_BACKEND_HEALTH_ENDPOINT`, kiểm tra
+health trước, rồi truyền endpoint identify bằng Gradle property. Hãy triển khai backend sau một
+HTTPS reverse proxy/load balancer và không trỏ release vào hostname mặc định hoặc hostname mẫu.
 
 ## Quyền camera
 

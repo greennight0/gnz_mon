@@ -2,6 +2,8 @@ package com.example.data.repository
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.example.data.api.GeminiVisionClient
 import com.example.data.local.AppDatabase
 import com.example.data.local.SpeciesDao
@@ -14,7 +16,13 @@ import kotlinx.coroutines.flow.Flow
 class SpeciesRepository(context: Context) {
 
     private val speciesDao: SpeciesDao = AppDatabase.getDatabase(context).speciesDao()
-    private val geminiVisionClient = GeminiVisionClient()
+    private val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
+    private val geminiVisionClient = GeminiVisionClient(isNetworkAvailable = {
+        connectivityManager?.activeNetwork?.let { network ->
+            connectivityManager.getNetworkCapabilities(network)
+                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } == true
+    })
 
     val discoveredSpeciesFlow: Flow<List<SpeciesInfo>> = speciesDao.getAllDiscovered()
 

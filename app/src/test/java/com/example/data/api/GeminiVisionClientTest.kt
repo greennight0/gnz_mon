@@ -16,6 +16,9 @@ import org.junit.Test
 import org.json.JSONObject
 import java.io.IOException
 import java.net.SocketTimeoutException
+import java.net.ConnectException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLHandshakeException
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -136,8 +139,25 @@ class GeminiVisionClientTest {
         client.mapTransportFailure(SocketTimeoutException()), ScanFailureReason.Timeout
     )
 
-    @Test fun `network failure has its own category`() = assertFailure(
-        client.mapTransportFailure(IOException()), ScanFailureReason.Network
+    @Test fun `dns failure has its own category`() = assertFailure(
+        client.mapTransportFailure(UnknownHostException()), ScanFailureReason.Dns
+    )
+
+    @Test fun `tls failure has its own category`() = assertFailure(
+        client.mapTransportFailure(SSLHandshakeException("certificate")), ScanFailureReason.Tls
+    )
+
+    @Test fun `connection refused has its own category`() = assertFailure(
+        client.mapTransportFailure(ConnectException("refused")), ScanFailureReason.ConnectionRefused
+    )
+
+    @Test fun `generic io is not reported as offline while a network is available`() = assertFailure(
+        client.mapTransportFailure(IOException()), ScanFailureReason.Io
+    )
+
+    @Test fun `generic io is reported as offline only after connectivity confirmation`() = assertFailure(
+        GeminiVisionClient(isNetworkAvailable = { false }).mapTransportFailure(IOException()),
+        ScanFailureReason.Network
     )
 
     @Test fun `low organism confidence has its own category`() = assertFailure(

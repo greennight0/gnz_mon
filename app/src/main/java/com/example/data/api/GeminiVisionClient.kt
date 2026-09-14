@@ -21,8 +21,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.ConnectException
 import java.io.OutputStream
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -32,7 +35,8 @@ class GeminiVisionClient internal constructor(
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    private val isNetworkAvailable: () -> Boolean = { true }
 ) {
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -193,8 +197,16 @@ class GeminiVisionClient internal constructor(
         return parseSpeciesJson(cleanJsonString(rawText), code)
     }
 
-    internal fun mapTransportFailure(error: IOException): RecognitionResult.Failure =
-        failure(if (error is SocketTimeoutException) ScanFailureReason.Timeout else ScanFailureReason.Network, error)
+    internal fun mapTransportFailure(error: IOException): RecognitionResult.Failure = failure(
+        when (error) {
+            is UnknownHostException -> ScanFailureReason.Dns
+            is SSLException -> ScanFailureReason.Tls
+            is ConnectException -> ScanFailureReason.ConnectionRefused
+            is SocketTimeoutException -> ScanFailureReason.Timeout
+            else -> if (!isNetworkAvailable()) ScanFailureReason.Network else ScanFailureReason.Io
+        },
+        error
+    )
 
     /** Kept separate from request construction so the wire contract can be fixture-tested. */
     internal fun createGenerationConfig(): JSONObject = JSONObject().apply {
