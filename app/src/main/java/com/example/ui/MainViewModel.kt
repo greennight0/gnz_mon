@@ -45,6 +45,7 @@ data class ScanRequest(
 private const val TARGET_LOCK_MISSED_FRAME_TIMEOUT = 3
 private const val TARGET_LOCK_MIN_IOU = 0.20f
 private const val TARGET_LOCK_MAX_CENTER_DISTANCE = 0.12f
+internal const val MANUAL_TARGET_TRACK_ID = Int.MIN_VALUE + 1
 
 private data class DetectorErrorClassification(
     val type: DetectorErrorType,
@@ -77,6 +78,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val selectedTrackId: StateFlow<Int?> = _selectedTrackId.asStateFlow()
     private var lockedTargetRect: RectF? = null
     private var missedLockedTargetFrames = 0
+    private var manualTargetBox: TrackedBoundingBox? = null
 
     // Đo kiểm hiệu năng AI Telemetry
     private val _inferenceLatencyMs = MutableStateFlow(16)
@@ -144,13 +146,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_detectorState.value is DetectorState.Error) return
         _inferenceLatencyMs.value = latency.coerceAtLeast(10)
         _detectorState.value = if (boxes.isEmpty()) DetectorState.NoObjects else DetectorState.Tracking
+        // Detector callbacks own detector tracks only. The manual target is UI-owned and must
+        // survive an empty (or unrelated) detector frame while the user selects and captures it.
+        val effectiveBoxes = buildList {
+            manualTargetBox?.let(::add)
+            addAll(boxes.filterNot { it.id == MANUAL_TARGET_TRACK_ID })
+        }
         val currentSelectedId = _selectedTrackId.value
 
-        if (boxes.isNotEmpty()) {
+        if (effectiveBoxes.isNotEmpty()) {
             val matchedTarget = when {
                 currentSelectedId == null -> null
-                else -> boxes.firstOrNull { it.id == currentSelectedId }
-                    ?: lockedTargetRect?.let { previousRect -> findLockedTarget(previousRect, boxes) }
+                else -> effectiveBoxes.firstOrNull { it.id == currentSelectedId }
+                    ?: lockedTargetRect?.let { previousRect -> findLockedTarget(previousRect, effectiveBoxes) }
             }
             val validSelectedId = when {
                 currentSelectedId == null -> null
@@ -166,7 +174,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 missedLockedTargetFrames = 0
             }
             _selectedTrackId.value = validSelectedId
-            val updated = boxes.map { box ->
+            val updated = effectiveBoxes.map { box ->
                 box.copy(
                     isSelected = (box.id == validSelectedId),
                     identifiedSpecies = _boxSpeciesMap.value[box.id]
@@ -278,20 +286,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val clampedT = (normCenterY - halfH).coerceIn(0.12f, 0.88f - halfH * 2)
         val newRect = RectF(clampedL, clampedT, clampedL + halfW * 2, clampedT + halfH * 2)
 
-        val newId = 200 + (_trackedObjects.value.count { it.id >= 200 } % 5)
         val customBox = TrackedBoundingBox(
-            id = newId,
+            id = MANUAL_TARGET_TRACK_ID,
             normalizedRect = newRect,
             label = "Target Specimen (Mục tiêu chọn)",
             confidence = 0.95f,
             isSelected = true
         )
 
-        val updatedList = _trackedObjects.value.filter { it.id != newId }.toMutableList().apply {
+        manualTargetBox = customBox
+        _boxSpeciesMap.value = _boxSpeciesMap.value - MANUAL_TARGET_TRACK_ID
+        val updatedList = _trackedObjects.value.filter { it.id != MANUAL_TARGET_TRACK_ID }.toMutableList().apply {
             add(0, customBox)
         }
         _trackedObjects.value = updatedList
-        _selectedTrackId.value = newId
+        _selectedTrackId.value = MANUAL_TARGET_TRACK_ID
         lockedTargetRect = RectF(newRect)
         missedLockedTargetFrames = 0
         _detectedSpecies.value = null // Sẵn sàng để quét mục tiêu vừa chọn

@@ -219,6 +219,7 @@ fun ScannerOverlay(
     detectorState: DetectorState = DetectorState.NotReady,
     selectedTrackId: Int? = null,
     onSelectTrack: (Int?) -> Unit = {},
+    onCreateTarget: (Float, Float) -> Unit = { _, _ -> },
     onSpeciesClick: (SpeciesInfo) -> Unit,
     onCaptureClick: () -> Unit,
     onRescanTarget: () -> Unit = {},
@@ -241,6 +242,7 @@ fun ScannerOverlay(
     val currentTrackedObjects by rememberUpdatedState(displayedTrackedObjects)
     val currentSelectedTrackId by rememberUpdatedState(selectedTrackId)
     val currentOnSelectTrack by rememberUpdatedState(onSelectTrack)
+    val currentOnCreateTarget by rememberUpdatedState(onCreateTarget)
     var displayedDetectorState by remember { mutableStateOf(detectorState) }
     LaunchedEffect(detectorState) {
         if (displayedDetectorState is DetectorState.FrameError &&
@@ -341,6 +343,11 @@ fun ScannerOverlay(
                                 screenH,
                                 minimumDisplaySizePx
                             ) -> currentOnSelectTrack(null)
+                            snapshotHit == null && screenW > 0f && screenH > 0f &&
+                                screenW.isFinite() && screenH.isFinite() -> currentOnCreateTarget(
+                                (tapPosition.x / screenW).coerceIn(0f, 1f),
+                                (tapPosition.y / screenH).coerceIn(0f, 1f)
+                            )
                         }
                     }
                 }
@@ -582,7 +589,11 @@ fun ScannerOverlay(
             val statusDetectorState = displayedDetectorState
             val statusText = when (statusDetectorState) {
                 DetectorState.NotReady -> if (isVi) "Detector đang khởi động…" else "Detector is starting…"
-                DetectorState.NoObjects -> if (isVi) "Chưa phát hiện đối tượng. Hãy hướng camera vào sinh vật." else "No object detected. Point the camera at an organism."
+                DetectorState.NoObjects -> if (isVi) {
+                    "Chưa phát hiện đối tượng. Hãy hướng camera hoặc chạm trực tiếp lên sinh vật để tạo vùng quét."
+                } else {
+                    "No object detected. Point the camera or tap directly on an organism to create a scan area."
+                }
                 is DetectorState.FrameError -> (if (isVi) {
                     "Không thể xử lý khung hình này. Detector vẫn đang chạy."
                 } else "This frame could not be processed. Detection is still running.") +

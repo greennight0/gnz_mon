@@ -268,6 +268,7 @@ fun MysteriesOfNatureApp(
                     detectorState = detectorState,
                     selectedTrackId = selectedTrackId,
                     onSelectTrack = { trackId -> viewModel.selectTrack(trackId) },
+                    onCreateTarget = { x, y -> viewModel.createOrMoveTargetBox(x, y) },
                     onSpeciesClick = { species ->
                         viewModel.openSpeciesDetail(species)
                     },

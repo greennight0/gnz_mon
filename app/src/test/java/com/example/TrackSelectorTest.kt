@@ -26,6 +26,7 @@ import com.example.data.model.SpeciesCategory
 import com.example.data.model.SpeciesInfo
 import com.example.data.model.TrackedBoundingBox
 import com.example.ui.MainViewModel
+import com.example.ui.MANUAL_TARGET_TRACK_ID
 import com.example.ui.components.ScannerOverlay
 import com.example.ui.components.hitTestTrackedBoxes
 import com.example.ui.components.displayedTrackedRect
@@ -143,6 +144,59 @@ class TrackSelectorTest {
             .assertIsNotSelected()
         composeRule.onNodeWithTag("capture_button").assertDoesNotExist()
         assertEquals(null, lastSelectedId)
+    }
+
+    @Test
+    fun tappingEmptyCanvasCreatesTargetAtNormalizedPosition() {
+        var createdTarget: Pair<Float, Float>? = null
+        composeRule.setContent {
+            ScannerOverlay(
+                modifier = Modifier.size(400.dp, 800.dp),
+                detectedSpecies = null,
+                isAnalyzing = false,
+                language = AppLanguage.VIETNAMESE,
+                onCreateTarget = { x, y -> createdTarget = x to y },
+                onSpeciesClick = {},
+                onCaptureClick = {}
+            )
+        }
+
+        composeRule.onNodeWithTag("bounding_box_canvas")
+            .performTouchInput { click(Offset(100f, 600f)) }
+
+        assertEquals(0.25f, createdTarget?.first ?: -1f, 0.001f)
+        assertEquals(0.75f, createdTarget?.second ?: -1f, 0.001f)
+    }
+
+    @Test
+    fun tappingExistingBoxOnCanvasStillSelectsAndDeselectsWithoutCreatingTarget() {
+        val selections = mutableListOf<Int?>()
+        val creations = mutableListOf<Pair<Float, Float>>()
+        var selectedId by mutableStateOf<Int?>(null)
+        composeRule.setContent {
+            ScannerOverlay(
+                modifier = Modifier.size(400.dp, 800.dp),
+                detectedSpecies = null,
+                isAnalyzing = false,
+                language = AppLanguage.VIETNAMESE,
+                trackedObjects = listOf(trackedBox),
+                selectedTrackId = selectedId,
+                onSelectTrack = {
+                    selectedId = it
+                    selections += it
+                },
+                onCreateTarget = { x, y -> creations += x to y },
+                onSpeciesClick = {},
+                onCaptureClick = {}
+            )
+        }
+
+        val boxCenter = Offset(160f, 320f)
+        composeRule.onNodeWithTag("bounding_box_canvas").performTouchInput { click(boxCenter) }
+        composeRule.onNodeWithTag("bounding_box_canvas").performTouchInput { click(boxCenter) }
+
+        assertEquals(listOf(42, null), selections)
+        assertEquals(emptyList<Pair<Float, Float>>(), creations)
     }
 
     @Test
@@ -364,6 +418,18 @@ class TrackSelectorTest {
 
         viewModel.onObjectsTracked(listOf(target.copy(normalizedRect = RectF(0.22f, 0.25f, 0.62f, 0.55f))), 16)
         assertEquals(10, viewModel.selectedTrackId.value)
+        assertEquals(true, viewModel.trackedObjects.value.single().isSelected)
+    }
+
+    @Test
+    fun emptyDetectorFrameDoesNotRemoveSelectedManualTargetBeforeCapture() {
+        val viewModel = MainViewModel(RuntimeEnvironment.getApplication())
+        viewModel.createOrMoveTargetBox(0.7f, 0.4f)
+
+        viewModel.onObjectsTracked(emptyList(), 16)
+
+        assertEquals(MANUAL_TARGET_TRACK_ID, viewModel.selectedTrackId.value)
+        assertEquals(MANUAL_TARGET_TRACK_ID, viewModel.trackedObjects.value.single().id)
         assertEquals(true, viewModel.trackedObjects.value.single().isSelected)
     }
 }
