@@ -32,7 +32,12 @@ sealed interface ScanState {
 sealed interface ScanFailureReason {
     data class Http(val statusCode: Int) : ScanFailureReason
     data object Timeout : ScanFailureReason
+    data object Dns : ScanFailureReason
+    data object Tls : ScanFailureReason
+    data object ConnectionRefused : ScanFailureReason
+    /** Used only when Android has confirmed that no network is currently available. */
     data object Network : ScanFailureReason
+    data object Io : ScanFailureReason
     data object EmptyResponse : ScanFailureReason
     data object InvalidResponse : ScanFailureReason
     data object MalformedJson : ScanFailureReason

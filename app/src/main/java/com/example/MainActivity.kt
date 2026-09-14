@@ -172,7 +172,7 @@ fun MysteriesOfNatureApp(
             showRecognitionErrorSnackbar(
                 error = error,
                 buildMessage = {
-                    localizedScanError(context, language, (error as? ScanException)?.reason)
+                    resolveScanFailureMessage(context, language, (error as? ScanException)?.reason)
                 },
                 showMessage = { snackbarHostState.showSnackbar(it) },
                 onHandled = viewModel::clearRecognitionError
@@ -348,7 +348,7 @@ internal suspend fun showRecognitionErrorSnackbar(
     }
 }
 
-private fun localizedScanError(
+internal fun resolveScanFailureMessage(
     context: android.content.Context,
     language: AppLanguage,
     reason: ScanFailureReason?
@@ -356,6 +356,10 @@ private fun localizedScanError(
     val vi = language == AppLanguage.VIETNAMESE
     val id = when (reason) {
         ScanFailureReason.Network -> if (vi) R.string.scan_error_network_vi else R.string.scan_error_network_en
+        ScanFailureReason.Dns -> if (vi) R.string.scan_error_dns_vi else R.string.scan_error_dns_en
+        ScanFailureReason.Tls -> if (vi) R.string.scan_error_tls_vi else R.string.scan_error_tls_en
+        ScanFailureReason.ConnectionRefused -> if (vi) R.string.scan_error_connect_vi else R.string.scan_error_connect_en
+        ScanFailureReason.Io -> if (vi) R.string.scan_error_io_vi else R.string.scan_error_io_en
         ScanFailureReason.Timeout -> if (vi) R.string.scan_error_timeout_vi else R.string.scan_error_timeout_en
         ScanFailureReason.EmptyResponse -> if (vi) R.string.scan_error_empty_vi else R.string.scan_error_empty_en
         ScanFailureReason.InvalidResponse, ScanFailureReason.MalformedJson,

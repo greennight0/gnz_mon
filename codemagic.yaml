@@ -8,6 +8,8 @@ workflows:
         PACKAGE_NAME: "com.aistudio.gnzmon.wqrk"
       groups:
         - google_credentials
+        # Defines GNZ_MON_BACKEND_ENDPOINT and GNZ_MON_BACKEND_HEALTH_ENDPOINT for the deployed service.
+        - backend_config
     scripts:
       - name: Bootstrap Gradle 9.3.1
         script: |
@@ -27,23 +29,36 @@ workflows:
           GRADLE_BIN="$TOOLS_DIR/gradle-${GRADLE_VERSION}/bin/gradle"
           test -x "$GRADLE_BIN"
           printf 'GRADLE_BIN=%s\n' "$GRADLE_BIN" >> "$CM_ENV"
-      - name: Build Android Debug APK
+      - name: Verify deployed backend health
+        script: |
+          set -euo pipefail
+          : "${GNZ_MON_BACKEND_ENDPOINT:?Set the deployed identify endpoint in backend_config}"
+          : "${GNZ_MON_BACKEND_HEALTH_ENDPOINT:?Set the image-free health endpoint in backend_config}"
+          case "$GNZ_MON_BACKEND_ENDPOINT" in
+            https://*/v1/species/identify) ;;
+            *) echo "GNZ_MON_BACKEND_ENDPOINT must be the deployed HTTPS identify route" >&2; exit 1 ;;
+          esac
+          case "$GNZ_MON_BACKEND_HEALTH_ENDPOINT" in https://*) ;; *) exit 1 ;; esac
+          curl --fail --silent --show-error --retry 3 --max-time 15 "$GNZ_MON_BACKEND_HEALTH_ENDPOINT" \
+            | python3 -c 'import json,sys; assert json.load(sys.stdin)["status"] == "ok"'
+      - name: Build Android Release APK
         script: |
           set -euo pipefail
           : "${GRADLE_BIN:?GRADLE_BIN was not restored from the bootstrap step}"
           test -x "$GRADLE_BIN"
-          ASSEMBLE_LOG="$CM_BUILD_DIR/assemble-debug.log"
+          ASSEMBLE_LOG="$CM_BUILD_DIR/assemble-release.log"
 
           set +e
-          "$GRADLE_BIN" :app:assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee "$ASSEMBLE_LOG"
+          "$GRADLE_BIN" :app:assembleRelease --no-daemon --stacktrace --console=plain \
+            "-PGNZ_MON_BACKEND_ENDPOINT=$GNZ_MON_BACKEND_ENDPOINT" 2>&1 | tee "$ASSEMBLE_LOG"
           GRADLE_EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
           rg -n -C 10 'e:|error:|\.kt' "$ASSEMBLE_LOG" || true
           exit "$GRADLE_EXIT_CODE"
     artifacts:
-      - app/build/outputs/apk/debug/app-debug.apk
-      - $CM_BUILD_DIR/assemble-debug.log
+      - app/build/outputs/apk/release/app-release.apk
+      - $CM_BUILD_DIR/assemble-release.log
     publishing:
       email:
         recipients:

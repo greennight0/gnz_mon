@@ -1,14 +1,34 @@
 import com.android.build.api.artifact.SingleArtifact
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 import java.util.Locale
+import java.net.URI
 
 // This is the single build-time source of truth for both BuildConfig and model validation.
 val detectorModelAsset = "models/nature_scope_efficientdet_lite0_int8.tflite"
 val detectorModelManifest = "models/nature_scope_efficientdet_lite0_int8.manifest.json"
 val minimumDetectorModelBytes = 1_000_000L
 val detectorModelSha256 = "0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb"
-val backendEndpoint = providers.gradleProperty("GNZ_MON_BACKEND_ENDPOINT")
-  .orElse("https://api.gnzmon.app/v1/species/identify")
+val configuredBackendEndpoint = providers.gradleProperty("GNZ_MON_BACKEND_ENDPOINT")
+val releaseRequested = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+if (releaseRequested && !configuredBackendEndpoint.isPresent) {
+  throw GradleException(
+    "Release builds require -PGNZ_MON_BACKEND_ENDPOINT=https://<deployed-host>/v1/species/identify"
+  )
+}
+val backendEndpoint = configuredBackendEndpoint.orElse("https://api.gnzmon.app/v1/species/identify")
+val suppliedEndpoint = configuredBackendEndpoint.orNull
+if (suppliedEndpoint != null) {
+  val uri = runCatching { URI(suppliedEndpoint) }.getOrNull()
+  val sampleTokens = listOf("<host>", "example.com", "localhost", "127.0.0.1", "api.gnzmon.app")
+  require(
+    uri?.scheme.equals("https", ignoreCase = true) &&
+      !uri?.host.isNullOrBlank() &&
+      uri?.userInfo == null &&
+      sampleTokens.none { suppliedEndpoint.contains(it, ignoreCase = true) }
+  ) {
+    "GNZ_MON_BACKEND_ENDPOINT must be a deployed HTTPS URL with a valid host, not a sample/default value"
+  }
+}
 
 plugins {
   alias(libs.plugins.android.application)

@@ -86,6 +86,22 @@ class ScanStateUiTest {
         composeRule.onNodeWithTag("scan_error").assertExists()
     }
 
+    @Test fun `transport failures have precise Vietnamese and English guidance`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val cases = listOf(
+            ScanFailureReason.Dns to ("Không tìm thấy máy chủ" to "Server not found"),
+            ScanFailureReason.Tls to ("Không thể thiết lập kết nối bảo mật" to "Could not establish a secure connection"),
+            ScanFailureReason.ConnectionRefused to ("Không thể kết nối tới dịch vụ" to "Could not connect to the service"),
+            ScanFailureReason.Timeout to ("Dịch vụ không phản hồi" to "The service did not respond"),
+            ScanFailureReason.Io to ("Kết nối tới dịch vụ bị gián đoạn" to "The service connection was interrupted"),
+            ScanFailureReason.Network to ("Không có kết nối Internet" to "No Internet connection")
+        )
+        cases.forEach { (reason, expected) ->
+            assertTrue(resolveScanFailureMessage(context, AppLanguage.VIETNAMESE, reason).startsWith(expected.first))
+            assertTrue(resolveScanFailureMessage(context, AppLanguage.ENGLISH, reason).startsWith(expected.second))
+        }
+    }
+
     @Test fun `detector model error has safe guidance and retry`() {
         setDetectorState(DetectorState.Error(IllegalArgumentException("private details"), DetectorErrorType.INVALID_MODEL))
         composeRule.onNodeWithTag("detector_status_guidance")
