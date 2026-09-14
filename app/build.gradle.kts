@@ -3,8 +3,10 @@ import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesS
 import java.util.Locale
 
 // This is the single build-time source of truth for both BuildConfig and model validation.
-val detectorModelAsset = "models/efficientdet_lite0_int8.tflite"
+val detectorModelAsset = "models/nature_scope_efficientdet_lite0_int8.tflite"
+val detectorModelManifest = "models/nature_scope_efficientdet_lite0_int8.manifest.json"
 val minimumDetectorModelBytes = 1_000_000L
+val detectorModelSha256 = "0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb"
 
 plugins {
   alias(libs.plugins.android.application)
@@ -145,6 +147,9 @@ androidComponents {
       description = "Validates the MediaPipe detector model before ${variant.name} assets are merged."
       this.modelFile.set(modelFile)
       minimumByteCount.set(minimumDetectorModelBytes)
+      manifestFile.set(layout.projectDirectory.file("src/main/assets/$detectorModelManifest"))
+      requiredGroups.set(listOf("plant", "leaf", "flower", "fruit", "vegetable", "fungus", "insect", "animal"))
+      expectedSha256.set(detectorModelSha256)
     }
 
     tasks.matching { it.name == "merge${capitalizedVariant}Assets" }.configureEach {
@@ -160,6 +165,8 @@ androidComponents {
       archiveKind.set("APK")
       expectedAssetPath.set("assets/$detectorModelAsset")
       minimumByteCount.set(minimumDetectorModelBytes)
+      expectedManifestPath.set("assets/$detectorModelManifest")
+      expectedSha256.set(detectorModelSha256)
       val apkDirectory = variant.artifacts.get(SingleArtifact.APK)
       archives.from(apkDirectory.map { directory ->
         directory.asFileTree.matching { include("*.apk") }
@@ -175,6 +182,8 @@ androidComponents {
       archiveKind.set("AAB")
       expectedAssetPath.set("assets/$detectorModelAsset")
       minimumByteCount.set(minimumDetectorModelBytes)
+      expectedManifestPath.set("assets/$detectorModelManifest")
+      expectedSha256.set(detectorModelSha256)
       archives.from(variant.artifacts.get(SingleArtifact.BUNDLE))
     }
     tasks.matching { it.name == "assemble$capitalizedVariant" }.configureEach {

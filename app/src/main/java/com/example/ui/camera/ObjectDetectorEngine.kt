@@ -126,8 +126,10 @@ class EfficientDetLiteEngine private constructor(
     }
 
     companion object {
+        /** Selected from the checked-in calibration set; see the model manifest for the sweep. */
+        const val CALIBRATED_SCORE_THRESHOLD = 0.22f
         val MODEL_ASSET: String = BuildConfig.DETECTOR_MODEL_ASSET
-        fun create(context: Context, scoreThreshold: Float = 0.35f): EfficientDetLiteEngine {
+        fun create(context: Context, scoreThreshold: Float = CALIBRATED_SCORE_THRESHOLD): EfficientDetLiteEngine {
             // Opening first gives a deterministic, controlled error for absent/corrupt packaging.
             context.assets.open(MODEL_ASSET).use { require(it.read() >= 0) }
             val options = ObjectDetector.ObjectDetectorOptions.builder()

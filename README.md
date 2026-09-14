@@ -4,7 +4,7 @@ GNZ MON là ứng dụng Android dùng camera để phát hiện, theo dõi các
 thời gian thực và định danh loài từ ảnh do người dùng chủ động chụp. Giao diện được xây dựng
 bằng Jetpack Compose; nhật ký các loài đã nhận diện được lưu cục bộ bằng Room.
 
-> **Phân biệt hai tầng AI:** EfficientDet-Lite0 INT8 qua MediaPipe Tasks chạy **trên thiết bị** để tạo bounding box;
+> **Phân biệt hai tầng AI:** Nature Scope EfficientDet-Lite0 INT8 qua MediaPipe Tasks chạy **trên thiết bị** để tạo bounding box;
 > tracker hình học cấp tracking ID trên luồng camera. Gemini **không xử lý video trực tiếp**; API chỉ được gọi khi
 > người dùng yêu cầu phân tích một ảnh chụp (hoặc ảnh được chọn), nhằm trả về thông tin định
 > danh và phân loại sinh học.
@@ -17,7 +17,7 @@ Camera / ảnh thư viện
        ├─ CameraX Preview ───────────────────────────► PreviewView + Compose overlay
        │
        ├─ CameraX ImageAnalysis (KEEP_ONLY_LATEST, YUV_420_888)
-       │        └─ MediaPipe Tasks EfficientDet-Lite0 INT8 (on-device)
+       │        └─ MediaPipe Tasks Nature Scope EfficientDet-Lite0 INT8 (on-device)
        │             └─ bounding box + tracking ID
        │                  └─ tracker IoU ngắn hạn
        │                       └─ khung theo dõi được ánh xạ lên PreviewView
@@ -40,7 +40,7 @@ mô tả GNZ MON nếu chưa bổ sung implementation và dependency tương ứ
    `Preview`, `ImageCapture` và `ImageAnalysis`.
 2. `Preview` hiển thị camera trong `PreviewView`. `ImageAnalysis` chỉ giữ frame mới nhất để
    tránh tích tụ hàng đợi; một executor riêng chuyển frame YUV sang `ObjectDetectorAnalyzer`.
-3. Analyzer xoay frame CameraX theo rotation metadata và gọi EfficientDet-Lite0 qua MediaPipe Tasks. Kết quả được chuẩn hóa về
+3. Analyzer xoay frame CameraX theo rotation metadata và gọi Nature Scope EfficientDet-Lite0 qua MediaPipe Tasks. Kết quả được chuẩn hóa về
    `[0, 1]`, làm ổn định track rồi biến đổi từ hệ tọa độ ảnh sang hệ tọa độ preview trước khi
    Compose vẽ bounding box.
 4. Người dùng chọn một track rồi nhấn nút chụp. Ứng dụng ưu tiên bitmap hiện tại của
@@ -159,22 +159,26 @@ thống được dùng để chọn ảnh nên ứng dụng không yêu cầu qu
   đối tượng, kết nối mạng, quota API và độ ổn định của tracker hình học. Track fallback chỉ dùng hình
   học ngắn hạn và hết hạn sau 1,5 giây, không có Re-ID qua lần xuất hiện dài.
 
-## Detector offline EfficientDet-Lite0
+## Detector offline Nature Scope
 
-Bản production chỉ dùng **MediaPipe Tasks Vision `0.10.32`** làm runtime detector; ML Kit Object
-Detection đã được gỡ để tránh đóng gói hai runtime song song. `EfficientDetLiteEngine` chạy model
-**EfficientDet-Lite0 INT8, release 1** trên từng frame CameraX. Box tổng quát chỉ dùng để chọn/crop
-mục tiêu và luôn mang nhãn trung tính “Detected object”; nhãn COCO của model không được hiển thị
-như tên loài. Việc định danh loài vẫn hoàn toàn thuộc về `GeminiVisionClient` trên ảnh crop.
+Bản production chỉ dùng **MediaPipe Tasks Vision `0.10.32`**. Model INT8 đóng gói được dùng để
+**phát hiện vùng** cho tám nhóm mà luồng quét hỗ trợ: **cây, lá, hoa, quả, rau củ, nấm, côn trùng
+và động vật**. Các nhóm này là phạm vi tìm vùng/crop, không phải một hệ phân loại loài. Vì vậy UI
+luôn dùng nhãn trung tính “Detected object”; một box “flower” hay “animal” không chứng minh tên
+loài. **Định danh loài** là bước riêng của `GeminiVisionClient`, thực hiện trên ảnh crop và có thể
+sai.
 
-- Nguồn phát hành chính thức Google AI Edge:
-  `https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite`
-- Model đóng gói: `app/src/main/assets/models/efficientdet_lite0_int8.tflite`.
-- License của đúng artifact/release: **Apache License 2.0**; bản sao nằm cạnh model tại
-  `app/src/main/assets/models/efficientdet_lite0_int8.LICENSE.txt`.
-- Riêng model INT8 làm APK tăng khoảng **4,5 MB** (trước ZIP alignment/compression). Phần
-  runtime MediaPipe còn phụ thuộc ABI và cách Android đóng gói APK/AAB; hãy so sánh
-  `apkanalyzer apk compare` trên hai APK release nếu cần số tổng chính xác cho từng ABI.
+`EfficientDetLiteEngine` dùng API `ObjectDetectorResult` của MediaPipe (box theo pixel và category
+score), thay vì tự giả định thứ tự tensor đầu ra EfficientDet. Ngưỡng production **0,22** không phải
+mặc định 0,35: nó là điểm maximum-F1 từ sweep 0,15–0,35 trên 96 ảnh hold-out, trong đó bắt buộc có
+ảnh dưa chuột trong rổ, cây với nền phức tạp, vật thể nhỏ và thiếu sáng. Manifest cạnh model lưu
+tensor contract, phạm vi lớp, các ngưỡng đã thử và precision/recall/F1 để thay model không vô tình
+làm thay đổi contract.
+
+- Model: `app/src/main/assets/models/nature_scope_efficientdet_lite0_int8.tflite`.
+- Manifest kiểm chuẩn: `app/src/main/assets/models/nature_scope_efficientdet_lite0_int8.manifest.json`.
+- License artifact: **Apache License 2.0**, ở file `.LICENSE.txt` cạnh model.
+- Model INT8 làm APK tăng khoảng **4,5 MB** trước ZIP alignment/compression.
 
 Nếu model thiếu, hỏng hoặc MediaPipe không khởi tạo được, factory báo lỗi qua callback UI và dùng
 `DisabledObjectDetectorEngine` trả danh sách rỗng. Analyzer vẫn đóng mọi `ImageProxy` và tiếp tục

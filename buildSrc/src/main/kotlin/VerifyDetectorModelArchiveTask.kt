@@ -7,6 +7,7 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import java.util.zip.ZipFile
+import java.security.MessageDigest
 
 abstract class VerifyDetectorModelArchiveTask : DefaultTask() {
   @get:Input
@@ -20,6 +21,12 @@ abstract class VerifyDetectorModelArchiveTask : DefaultTask() {
 
   @get:Input
   abstract val minimumByteCount: Property<Long>
+
+  @get:Input
+  abstract val expectedManifestPath: Property<String>
+
+  @get:Input
+  abstract val expectedSha256: Property<String>
 
   @get:InputFiles
   @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -48,6 +55,24 @@ abstract class VerifyDetectorModelArchiveTask : DefaultTask() {
         }
         check(matches.single().size > minimumBytes) {
           "Packaged detector model in ${archive.name} is too small: ${matches.single().size} bytes"
+        }
+        val digest = zip.getInputStream(matches.single()).use { input ->
+          val sha = MessageDigest.getInstance("SHA-256")
+          val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+          while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            sha.update(buffer, 0, count)
+          }
+          sha.digest().joinToString("") { "%02x".format(it) }
+        }
+        check(digest == expectedSha256.get()) {
+          "Packaged detector in ${archive.name} has unexpected SHA-256: $digest"
+        }
+        val manifests = zip.entries().asSequence()
+          .filter { !it.isDirectory && it.name.endsWith(expectedManifestPath.get()) }.toList()
+        check(manifests.size == 1) {
+          "${archive.name} must contain exactly one ${expectedManifestPath.get()}; found ${manifests.map { it.name }}"
         }
       }
     }

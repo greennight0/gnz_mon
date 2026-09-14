@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "model": "Nature Scope EfficientDet-Lite0 INT8",
+  "runtime": "MediaPipe ObjectDetector",
+  "tensorContract": {
+    "boxes": "MediaPipe Detection bounding boxes in input-pixel coordinates",
+    "categories": "MediaPipe category score; taxonomy labels are not species names"
+  },
+  "supportedOrganismGroups": [
+    "plant", "leaf", "flower", "fruit", "vegetable", "fungus", "insect", "animal"
+  ],
+  "scoreThreshold": 0.22,
+  "calibration": {
+    "method": "maximum-F1 threshold sweep on held-out photographs",
+    "images": 96,
+    "requiredConditions": [
+      "cucumbers in a basket", "plant with complex background", "small object", "low light"
+    ],
+    "thresholdsEvaluated": [0.15, 0.18, 0.20, 0.22, 0.25, 0.30, 0.35],
+    "selectedThreshold": 0.22,
+    "precision": 0.71,
+    "recall": 0.84,
+    "f1": 0.77
+  },
+  "limitations": "Detects organism regions only. It does not identify a species."
+}
