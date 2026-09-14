@@ -184,7 +184,7 @@ class ScanStateUiTest {
     @Test fun `unexpected analysis exception stays on scanner and permits retry`() = runBlocking {
         val viewModel = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
         var attempts = 0
-        viewModel.identifyImage = { _, _, _ ->
+        viewModel.identifyImage = { _, _ ->
             attempts++
             throw IllegalStateException("surprise")
         }

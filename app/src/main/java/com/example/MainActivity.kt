@@ -117,7 +117,6 @@ fun MysteriesOfNatureApp(
     val isFrontCamera by viewModel.isFrontCamera.collectAsState()
     val language by viewModel.language.collectAsState()
     val themeMode by viewModel.themeMode.collectAsState()
-    val customApiKey by viewModel.customApiKey.collectAsState()
     val isSettingsOpen by viewModel.isSettingsOpen.collectAsState()
     val trackedObjects by viewModel.trackedObjects.collectAsState()
     val detectorState by viewModel.detectorState.collectAsState()
@@ -356,7 +355,6 @@ private fun localizedScanError(
 ): String {
     val vi = language == AppLanguage.VIETNAMESE
     val id = when (reason) {
-        ScanFailureReason.MissingApiKey -> if (vi) R.string.scan_error_api_key_vi else R.string.scan_error_api_key_en
         ScanFailureReason.Network -> if (vi) R.string.scan_error_network_vi else R.string.scan_error_network_en
         ScanFailureReason.Timeout -> if (vi) R.string.scan_error_timeout_vi else R.string.scan_error_timeout_en
         ScanFailureReason.EmptyResponse -> if (vi) R.string.scan_error_empty_vi else R.string.scan_error_empty_en

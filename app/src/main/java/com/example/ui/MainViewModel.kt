@@ -120,9 +120,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _themeMode = MutableStateFlow(AppThemeMode.DARK)
     val themeMode: StateFlow<AppThemeMode> = _themeMode.asStateFlow()
 
-    private val _customApiKey = MutableStateFlow("")
-    val customApiKey: StateFlow<String> = _customApiKey.asStateFlow()
-
     private val _isSettingsOpen = MutableStateFlow(false)
     val isSettingsOpen: StateFlow<Boolean> = _isSettingsOpen.asStateFlow()
 
@@ -384,8 +381,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 // The bitmap and ID are one immutable click-time request; do not re-read tracking.
                 val result = identifyImage(
-                    request.croppedBitmap,
-                    _customApiKey.value.takeIf { it.isNotBlank() }
+                    request.croppedBitmap
                 ) { phase ->
                     _scanState.value = when (phase) {
                         ScanTransportPhase.ENCODING -> ScanState.EncodingImage(targetId, snapshotRect)
@@ -526,10 +522,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setThemeMode(mode: AppThemeMode) {
         _themeMode.value = mode
-    }
-
-    fun setCustomApiKey(key: String) {
-        _customApiKey.value = key
     }
 
     fun openSettings() {

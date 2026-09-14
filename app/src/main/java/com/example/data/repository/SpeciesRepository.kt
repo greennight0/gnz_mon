@@ -36,10 +36,9 @@ class SpeciesRepository(context: Context) {
 
     suspend fun identifyImage(
         bitmap: Bitmap,
-        customApiKey: String? = null,
         onPhase: (ScanTransportPhase) -> Unit = {}
     ): RecognitionResult {
-        val result = geminiVisionClient.identifyFloraOrFauna(bitmap, customApiKey, onPhase)
+        val result = geminiVisionClient.identifyFloraOrFauna(bitmap, onPhase)
         if (result is RecognitionResult.Organism) {
             saveSpeciesToJournal(result.species)
         }

@@ -14,8 +14,6 @@
     <string name="sns_close_vi">Đóng</string>
     <string name="sns_open_error_en">Unable to open link</string>
     <string name="sns_open_error_vi">Không thể mở liên kết</string>
-    <string name="scan_error_api_key_vi">Chưa cấu hình API key</string>
-    <string name="scan_error_api_key_en">API key is not configured</string>
     <string name="scan_error_network_vi">Không có kết nối</string>
     <string name="scan_error_network_en">No network connection</string>
     <string name="scan_error_timeout_vi">Kết nối đã hết thời gian chờ</string>
