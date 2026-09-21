@@ -1,6 +1,7 @@
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.PathSensitive
@@ -28,11 +29,19 @@ abstract class VerifyDetectorModelArchiveTask : DefaultTask() {
   @get:Input
   abstract val expectedSha256: Property<String>
 
+  @get:Input
+  abstract val requiredAssetPaths: ListProperty<String>
+
+  @get:Input
+  abstract val expectedTfliteAssetPaths: ListProperty<String>
+
   @get:InputFiles
   @get:PathSensitive(PathSensitivity.RELATIVE)
   abstract val archives: ConfigurableFileCollection
 
   init {
+    requiredAssetPaths.convention(emptyList())
+    expectedTfliteAssetPaths.convention(emptyList())
     outputs.upToDateWhen { false }
   }
 
@@ -73,6 +82,24 @@ abstract class VerifyDetectorModelArchiveTask : DefaultTask() {
           .filter { !it.isDirectory && it.name.endsWith(expectedManifestPath.get()) }.toList()
         check(manifests.size == 1) {
           "${archive.name} must contain exactly one ${expectedManifestPath.get()}; found ${manifests.map { it.name }}"
+        }
+        requiredAssetPaths.get().forEach { requiredPath ->
+          val requiredMatches = zip.entries().asSequence()
+            .filter { !it.isDirectory && it.name.endsWith(requiredPath) }
+            .toList()
+          check(requiredMatches.size == 1) {
+            "${archive.name} must contain exactly one $requiredPath; found ${requiredMatches.map { it.name }}"
+          }
+        }
+        val expectedModels = expectedTfliteAssetPaths.get().toSet()
+        if (expectedModels.isNotEmpty()) {
+          val packagedModels = zip.entries().asSequence()
+            .filter { !it.isDirectory && it.name.contains("assets/models/") && it.name.endsWith(".tflite") }
+            .map { entry -> "assets/models/" + entry.name.substringAfter("assets/models/") }
+            .toSet()
+          check(packagedModels == expectedModels) {
+            "${archive.name} contains unexpected TFLite models: packaged=$packagedModels expected=$expectedModels"
+          }
         }
       }
     }

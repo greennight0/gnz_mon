@@ -1,0 +1,14 @@
+{
+  "model": "PlantNet-300K ResNet18 LiteRT",
+  "source": "https://huggingface.co/litert-community/PlantNet-300K-ResNet18-LiteRT",
+  "sourceRevision": "main",
+  "upstreamWeights": "https://huggingface.co/cpoisson/plantnet300k-resnet18",
+  "conversion": "https://github.com/john-rocky/LiteRT-Models/tree/main/plantnet",
+  "sha256": "6f59f046c6a86593713aca76a3ab7bb55b520265eb66f5a77a114e450b1ccbf5",
+  "bytes": 46942600,
+  "inputShape": [1, 3, 224, 224],
+  "outputShape": [1, 1081],
+  "input": "Float32 NCHW RGB; divide by 255 then ImageNet mean/std normalization",
+  "output": "Float32 logits in plantnet_labels.txt order",
+  "licenses": ["Apache-2.0", "BSD-2-Clause"]
+}

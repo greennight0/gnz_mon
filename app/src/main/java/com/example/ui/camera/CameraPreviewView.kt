@@ -261,17 +261,6 @@ class CameraController(
         val targetRect = request.copyPreviewRect()
         val view = previewView ?: return onError(IllegalStateException("Camera preview is not ready"))
         val previewRect = mapAndClampTargetRect(targetRect, Matrix(), view.width, view.height)
-        view.bitmap?.let { bitmap ->
-            // PreviewView.bitmap normally matches the view, but do not assume that for resized
-            // surfaces or test providers: this is still a PreviewView-to-preview-bitmap mapping.
-            val viewToBitmap = Matrix().apply {
-                setScale(bitmap.width.toFloat() / view.width, bitmap.height.toFloat() / view.height)
-            }
-            val rect = mapAndClampTargetRect(previewRect, viewToBitmap, bitmap.width, bitmap.height)
-            onCaptured(snapshot(targetTrackId, bitmap, rect, TargetImageSource.PREVIEW_VIEW))
-            return
-        }
-
         // Copy the preview transform now: a later tracking/layout update cannot alter the request.
         val previewTransform = view.outputTransform
             ?: return onError(IllegalStateException("Preview transformation is not ready"))
@@ -283,35 +272,42 @@ class CameraController(
                 try {
                     val imageTransform = ImageProxyTransformFactory().apply {
                         isUsingCropRect = true
-                        isUsingRotationDegrees = true
+                        isUsingRotationDegrees = false
                     }.getOutputTransform(image)
                     val sourceRect = RectF(previewRect)
                     CoordinateTransform(previewTransform, imageTransform).mapRect(sourceRect)
                     val bitmap = image.toBitmap()
-                    val rect = mapAndClampTargetRect(sourceRect, Matrix(), bitmap.width, bitmap.height)
-                    onCaptured(snapshot(targetTrackId, bitmap, rect, TargetImageSource.IMAGE_CAPTURE))
+                    try {
+                        val rotation = uprightTransform(bitmap.width, bitmap.height, image.imageInfo.rotationDegrees)
+                        val upright = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, rotation, true)
+                        try {
+                            val rect = mapAndClampTargetRect(sourceRect, rotation, upright.width, upright.height)
+                            val captured = snapshot(targetTrackId, upright, rect, TargetImageSource.IMAGE_CAPTURE)
+                            ContextCompat.getMainExecutor(context).execute { onCaptured(captured) }
+                        } finally {
+                            if (upright !== bitmap) upright.recycle()
+                        }
+                    } finally {
+                        bitmap.recycle()
+                    }
                 } catch (e: Exception) {
                     Log.e("CameraController", "Failed to capture selected target", e)
-                    onError(e)
+                    ContextCompat.getMainExecutor(context).execute { onError(e) }
                 } finally {
                     image.close()
                 }
             }
 
-            override fun onError(exception: ImageCaptureException) = this@CameraController.onError(exception)
+            override fun onError(exception: ImageCaptureException) {
+                ContextCompat.getMainExecutor(context).execute { this@CameraController.onError(exception) }
+            }
         })
     }
 
     private fun snapshot(trackId: Int, source: Bitmap, rect: RectF, kind: TargetImageSource): TargetSnapshot {
-        val left = rect.left.toInt().coerceIn(0, source.width - 1)
-        val top = rect.top.toInt().coerceIn(0, source.height - 1)
-        val right = rect.right.toInt().coerceIn(left + 1, source.width)
-        val bottom = rect.bottom.toInt().coerceIn(top + 1, source.height)
-        val exactRect = RectF(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat())
-        return TargetSnapshot(
-            trackId, Bitmap.createBitmap(source, left, top, right - left, bottom - top),
-            exactRect, Size(source.width, source.height), kind
-        )
+        val square = expandedSquareRect(rect, source.width, source.height)
+        val bitmap = squareTargetBitmap(source, square)
+        return TargetSnapshot(trackId, bitmap, square, Size(source.width, source.height), kind)
     }
 
 
@@ -426,7 +422,7 @@ fun CameraPreviewView(
                 }
 
                 val imageCapture = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                     .build()
                 cameraController.imageCapture = imageCapture
 
@@ -612,3 +608,35 @@ internal fun mapBoxesToPreview(
 internal fun normalizePreviewRect(rect: RectF, width: Int, height: Int) = RectF(
     rect.left / width, rect.top / height, rect.right / width, rect.bottom / height
 )
+
+/** Matrix from raw buffer pixels to an upright bitmap, including positive origin translation. */
+internal fun uprightTransform(width: Int, height: Int, degrees: Int): Matrix = Matrix().apply {
+    setRotate(degrees.toFloat())
+    val bounds = RectF(0f, 0f, width.toFloat(), height.toFloat())
+    mapRect(bounds)
+    postTranslate(-bounds.left, -bounds.top)
+}
+
+/** Expand, never shrink the target. Shift into the image where possible; pad otherwise. */
+internal fun expandedSquareRect(target: RectF, width: Int, height: Int): RectF {
+    val left = kotlin.math.floor(target.left).coerceIn(0f, (width - 1).toFloat())
+    val top = kotlin.math.floor(target.top).coerceIn(0f, (height - 1).toFloat())
+    val right = kotlin.math.ceil(target.right).coerceIn(left + 1, width.toFloat())
+    val bottom = kotlin.math.ceil(target.bottom).coerceIn(top + 1, height.toFloat())
+    val side = maxOf(right - left, bottom - top)
+    fun origin(center: Float, extent: Int): Float = if (side <= extent) {
+        kotlin.math.floor(center - side / 2).coerceIn(0f, extent - side)
+    } else kotlin.math.floor((extent - side) / 2)
+    val x = origin((left + right) / 2, width)
+    val y = origin((top + bottom) / 2, height)
+    return RectF(x, y, x + side, y + side)
+}
+
+internal fun squareTargetBitmap(source: Bitmap, square: RectF): Bitmap {
+    val bitmap = Bitmap.createBitmap(square.width().toInt(), square.height().toInt(), Bitmap.Config.ARGB_8888)
+    android.graphics.Canvas(bitmap).apply {
+        drawColor(android.graphics.Color.rgb(124, 116, 104))
+        drawBitmap(source, -square.left, -square.top, null)
+    }
+    return bitmap
+}

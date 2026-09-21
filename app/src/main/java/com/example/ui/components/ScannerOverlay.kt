@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -86,6 +87,7 @@ import com.example.data.model.DetectorState
 import com.example.data.model.DetectorErrorType
 import com.example.data.model.DetectorStage
 import com.example.data.model.ScanState
+import com.example.data.model.ScanFailureReason
 import com.example.ui.theme.AmberGlow
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.LaserCyan
@@ -131,8 +133,8 @@ internal fun displayedTrackedRect(
 private fun phaseLabel(state: ScanState, isVi: Boolean): String = stringResource(when (state) {
     is ScanState.CapturingFrame -> if (isVi) R.string.scan_phase_capturing_vi else R.string.scan_phase_capturing_en
     is ScanState.CroppingTarget -> if (isVi) R.string.scan_phase_cropping_vi else R.string.scan_phase_cropping_en
-    is ScanState.EncodingImage -> if (isVi) R.string.scan_phase_encoding_vi else R.string.scan_phase_encoding_en
-    is ScanState.Uploading -> if (isVi) R.string.scan_phase_uploading_vi else R.string.scan_phase_uploading_en
+    is ScanState.PreparingImage -> if (isVi) R.string.scan_phase_preparing_vi else R.string.scan_phase_preparing_en
+    is ScanState.Classifying -> if (isVi) R.string.scan_phase_classifying_vi else R.string.scan_phase_classifying_en
     else -> if (isVi) R.string.scan_phase_analyzing_vi else R.string.scan_phase_analyzing_en
 })
 
@@ -165,12 +167,11 @@ internal fun hitTestTrackedBoxes(
                 .coerceAtMost(maximumVelocityPaddingPx)
             val horizontalPadding = touchPaddingPx + extraWidth + velocityPadX
             val verticalPadding = touchPaddingPx + extraHeight + velocityPadY
-            Rect(
-                visual.left - horizontalPadding,
-                visual.top - verticalPadding,
-                visual.right + horizontalPadding,
-                visual.bottom + verticalPadding
-            ).contains(tapPosition)
+            // All four drawn edges belong to the target, including right and bottom.
+            tapPosition.x >= visual.left - horizontalPadding &&
+                tapPosition.x <= visual.right + horizontalPadding &&
+                tapPosition.y >= visual.top - verticalPadding &&
+                tapPosition.y <= visual.bottom + verticalPadding
         }
         .sortedWith(
             compareByDescending<TrackedBoundingBox> { it.id == selectedTrackId }
@@ -512,6 +513,7 @@ fun ScannerOverlay(
             )
             sortedForBadges.forEach { box ->
                 val bLeft = (box.normalizedRect.left * screenW).toInt()
+                    .coerceIn(0, (screenW - with(density) { 160.dp.toPx() }).toInt().coerceAtLeast(0))
                 val bTop = (box.normalizedRect.top * screenH - with(density) { 34.dp.toPx() }).toInt()
                     .coerceAtLeast(with(density) { 110.dp.toPx().toInt() })
                 val isSelected = (selectedTrackId != null && box.id == selectedTrackId)
@@ -525,6 +527,7 @@ fun ScannerOverlay(
                 Box(
                     modifier = Modifier
                         .offset { IntOffset(bLeft, bTop) }
+                        .widthIn(max = with(density) { (screenW - bLeft).coerceAtLeast(1f).toDp() })
                         .testTag("box_header_tag_${box.id}")
                         .semantics {
                             selected = isSelected
@@ -559,13 +562,21 @@ fun ScannerOverlay(
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = if (hasSpecies) "✓ #${box.id}" else "TRK #${box.id}",
+                                text = if (box.id == com.example.ui.MANUAL_TARGET_TRACK_ID) {
+                                    if (isVi) "Mục tiêu đã chọn" else "Selected target"
+                                } else if (hasSpecies) "✓ #${box.id}" else "TRK #${box.id}",
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 color = badgeColor,
                                 fontSize = 9.5.sp,
                                 fontWeight = FontWeight.Black
                             )
+                            if (box.id != com.example.ui.MANUAL_TARGET_TRACK_ID || hasSpecies) {
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
+                                modifier = Modifier.weight(1f, fill = false),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 text = if (hasSpecies) (box.identifiedSpecies?.commonNameVi ?: box.label)
                                        else if (isSelected) "• ${box.label} [ĐÃ CHỌN]"
                                        else "• ${box.label}",
@@ -573,7 +584,8 @@ fun ScannerOverlay(
                                 fontSize = 9.5.sp,
                                 fontWeight = FontWeight.Bold
                             )
-                            if (!hasSpecies) {
+                            }
+                            if (!hasSpecies && box.id != com.example.ui.MANUAL_TARGET_TRACK_ID) {
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = "${(box.confidence * 100).toInt()}%",
@@ -778,6 +790,8 @@ fun ScannerOverlay(
                     onNextTrackClick = onNextTrack,
                     onDismissClick = onDismissSpecies
                 )
+            } else if (scanState is ScanState.Completed && scanState.result is RecognitionResult.Uncertain) {
+                UncertainTag(scanState.result, language, onRescanTarget)
             } else if (notOrganism != null) {
                 NotOrganismTag(
                     result = notOrganism,
@@ -786,7 +800,12 @@ fun ScannerOverlay(
                 )
             } else if (scanState is ScanState.Failed) {
                 Text(
-                    text = stringResource(if (isVi) R.string.scan_failed_vi else R.string.scan_failed_en),
+                    text = when (scanState.reason) {
+                        ScanFailureReason.LocalModelUnavailable -> stringResource(
+                            if (isVi) R.string.scan_error_model_unavailable_vi else R.string.scan_error_model_unavailable_en
+                        )
+                        else -> stringResource(if (isVi) R.string.scan_failed_vi else R.string.scan_failed_en)
+                    },
                     color = AmberGlow,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.testTag("scan_error")
@@ -850,12 +869,14 @@ fun ScannerOverlay(
                 text = if (isVi) {
                     when {
                         detectedSpecies != null -> "Nhấn nút để quét lại • Chạm nhãn hoặc khung để đổi mục tiêu"
+                        selectedTrackId == com.example.ui.MANUAL_TARGET_TRACK_ID -> "Mục tiêu đã chọn • Chạm lại để bỏ chọn"
                         selectedTrackId != null -> "Đã chọn mục tiêu #${selectedTrackId} • Chạm lại để bỏ chọn"
                         else -> "Chạm nhãn hoặc khung để chọn mục tiêu"
                     }
                 } else {
                     when {
                         detectedSpecies != null -> "Tap to rescan • Tap a label or box to change target"
+                        selectedTrackId == com.example.ui.MANUAL_TARGET_TRACK_ID -> "Selected target • Tap again to deselect"
                         selectedTrackId != null -> "Target #${selectedTrackId} selected • Tap again to deselect"
                         else -> "Tap a label or box to select a target"
                     }
@@ -864,6 +885,36 @@ fun ScannerOverlay(
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.Medium
             )
+        }
+    }
+}
+
+@Composable
+internal fun UncertainTag(result: RecognitionResult.Uncertain, language: AppLanguage, onRescanClick: () -> Unit) {
+    val isVi = language == AppLanguage.VIETNAMESE
+    Surface(
+        modifier = Modifier.fillMaxWidth().testTag("uncertain_message"),
+        shape = RoundedCornerShape(14.dp), color = Color(0xF2071933),
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, AmberGlow)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(if (isVi) "Chưa đủ chắc chắn để xác định loài" else "Not enough confidence to identify the species",
+                color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            result.candidates.forEach { candidate ->
+                Text("${candidate.scientificName} · ${"%.1f".format(java.util.Locale.ROOT, candidate.score * 100)}%",
+                    color = AmberGlow, fontSize = 12.sp)
+            }
+            Text(if (isVi) "Gợi ý chưa xác nhận. Điểm mô hình không phải xác suất đúng đã được kiểm chứng."
+                else "Unconfirmed suggestions. Model scores are not calibrated probabilities of correctness.",
+                color = Color.White, fontSize = 11.sp)
+            Text(if (isVi) "Chụp gần, đủ sáng và lấy trọn mẫu. Thử thêm lá hoặc hoa."
+                else "Move closer, use good lighting and include the whole specimen. Try a leaf or flower.",
+                color = Color.White, fontSize = 12.sp)
+            Surface(Modifier.clickable(onClick = onRescanClick).testTag("rescan_uncertain"),
+                color = CyberCyan, shape = RoundedCornerShape(10.dp)) {
+                Text(if (isVi) "Quét lại" else "Scan again", color = Color(0xFF002244),
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
+            }
         }
     }
 }

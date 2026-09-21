@@ -247,7 +247,7 @@ fun SettingsSheet(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Crafted with Kotlin • Jetpack Compose • Gemini Vision",
+                    text = "Crafted with Kotlin • Jetpack Compose • MediaPipe • LiteRT",
                     color = Color(0xFF6B87A8),
                     fontSize = 11.sp
                 )

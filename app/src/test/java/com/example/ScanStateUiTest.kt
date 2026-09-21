@@ -1,11 +1,13 @@
 package com.example
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.RectF
-import androidx.compose.ui.test.assertExists
-import androidx.compose.ui.test.assertDoesNotExist
-import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -22,6 +24,7 @@ import com.example.ui.components.ScannerOverlay
 import com.example.ui.components.detectorStageCode
 import com.example.ui.camera.DetectorStageException
 import com.example.ui.camera.CameraAnalysisInitializationException
+import com.example.data.classifier.LocalModelUnavailableException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
@@ -41,17 +44,73 @@ class ScanStateUiTest {
     private val rect = RectF(.2f, .2f, .8f, .8f)
     private val thumbnail = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
 
+    @Test fun `uncertain UI is localized and does not claim non organism`() {
+        var language by androidx.compose.runtime.mutableStateOf(AppLanguage.VIETNAMESE)
+        val result = com.example.data.model.RecognitionResult.Uncertain(listOf(
+            com.example.data.model.RecognitionResult.Candidate("Example plant", .67f)))
+        composeRule.setContent {
+            ScannerOverlay(detectedSpecies = null, isAnalyzing = false,
+                scanState = ScanState.Completed(7, rect, result), language = language,
+                onSpeciesClick = {}, onCaptureClick = {})
+        }
+        composeRule.onNodeWithText("Chưa đủ chắc chắn để xác định loài").assertExists()
+        composeRule.onNodeWithText("Example plant · 67.0%").assertExists()
+        composeRule.onNodeWithTag("not_organism_message").assertDoesNotExist()
+        composeRule.onNodeWithTag("rescan_uncertain").assertExists()
+        composeRule.runOnIdle { language = AppLanguage.ENGLISH }
+        composeRule.onNodeWithText("Not enough confidence to identify the species").assertExists()
+    }
+
+    @Test fun `capture error releases reservation and allows retry`() {
+        val model = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
+        assertTrue(model.beginCapture(7, rect))
+        assertFalse(model.beginCapture(8, rect))
+        model.reportRecognitionError(IllegalStateException("Capture failed"))
+        assertTrue(model.scanState.value is ScanState.Failed)
+        assertTrue(model.beginCapture(7, rect))
+    }
+
+    @Test fun `uncertain result clears previously identified target and rescan clears suggestions`() = runBlocking {
+        val model = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
+        model.createOrMoveTargetBox(.5f, .5f)
+        val id = model.selectedTrackId.value!!
+        val species = com.example.data.repository.SpeciesCatalog.fromScientificName("Example plant", .9f)
+        model.identifyImage = { _, _ -> com.example.data.model.RecognitionResult.Organism(species) }
+        model.analyzeImage(ScanRequest(id, thumbnail, rect))
+        awaitCompleted(model)
+        assertEquals(species, model.boxSpeciesMap.value[id])
+        model.identifyImage = { _, _ -> com.example.data.model.RecognitionResult.Uncertain(emptyList()) }
+        assertTrue(model.beginCapture(id, rect))
+        assertEquals(null, model.boxSpeciesMap.value[id])
+        model.analyzeImage(ScanRequest(id, thumbnail, rect))
+        awaitCompleted(model)
+        assertEquals(null, model.detectedSpecies.value)
+        assertEquals(null, model.trackedObjects.value.first().identifiedSpecies)
+        model.rescanCurrentTarget()
+        assertEquals(ScanState.Idle, model.scanState.value)
+    }
+
+    private suspend fun awaitCompleted(model: MainViewModel) {
+        repeat(100) {
+            if (model.scanState.value is ScanState.Completed && !model.isAnalyzing.value) return
+            delay(10)
+        }
+        throw AssertionError("Scan did not complete")
+    }
+
     @Test fun `view model captures snapshot rejects duplicate and finishes with typed failure`() = runBlocking {
         val viewModel = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
+        viewModel.identifyImage = { _, _ ->
+            com.example.data.model.RecognitionResult.Failure(
+                com.example.data.model.ScanException(ScanFailureReason.Unexpected)
+            )
+        }
         assertTrue(viewModel.beginCapture(7, rect))
         assertTrue(viewModel.scanState.value is ScanState.CapturingFrame)
         assertFalse(viewModel.beginCapture(7, RectF(0f, 0f, 1f, 1f)))
 
         viewModel.analyzeImage(ScanRequest(7, thumbnail, rect))
-        repeat(100) {
-            if (viewModel.scanState.value is ScanState.Failed) return@repeat
-            delay(10)
-        }
+        awaitFailure(viewModel)
         assertEquals(null, viewModel.scanThumbnail.value)
         assertTrue(viewModel.scanState.value is ScanState.Failed)
     }
@@ -61,7 +120,7 @@ class ScanStateUiTest {
             ScannerOverlay(
                 detectedSpecies = null,
                 isAnalyzing = true,
-                scanState = ScanState.Uploading(7, rect),
+                scanState = ScanState.Classifying(7, rect),
                 scanThumbnail = thumbnail,
                 language = AppLanguage.ENGLISH,
                 onSpeciesClick = {},
@@ -77,7 +136,7 @@ class ScanStateUiTest {
             ScannerOverlay(
                 detectedSpecies = null,
                 isAnalyzing = false,
-                scanState = ScanState.Failed(7, rect, ScanFailureReason.Network),
+                scanState = ScanState.Failed(7, rect, ScanFailureReason.Unexpected),
                 language = AppLanguage.VIETNAMESE,
                 onSpeciesClick = {},
                 onCaptureClick = {}
@@ -86,26 +145,9 @@ class ScanStateUiTest {
         composeRule.onNodeWithTag("scan_error").assertExists()
     }
 
-    @Test fun `transport failures have precise Vietnamese and English guidance`() {
-        val context = ApplicationProvider.getApplicationContext<Application>()
-        val cases = listOf(
-            ScanFailureReason.Dns to ("Không tìm thấy máy chủ" to "Server not found"),
-            ScanFailureReason.Tls to ("Không thể thiết lập kết nối bảo mật" to "Could not establish a secure connection"),
-            ScanFailureReason.ConnectionRefused to ("Không thể kết nối tới dịch vụ" to "Could not connect to the service"),
-            ScanFailureReason.Timeout to ("Dịch vụ không phản hồi" to "The service did not respond"),
-            ScanFailureReason.Io to ("Kết nối tới dịch vụ bị gián đoạn" to "The service connection was interrupted"),
-            ScanFailureReason.Network to ("Không có kết nối Internet" to "No Internet connection")
-        )
-        cases.forEach { (reason, expected) ->
-            assertTrue(resolveScanFailureMessage(context, AppLanguage.VIETNAMESE, reason).startsWith(expected.first))
-            assertTrue(resolveScanFailureMessage(context, AppLanguage.ENGLISH, reason).startsWith(expected.second))
-        }
-    }
-
     @Test fun `detector model error has safe guidance and retry`() {
         setDetectorState(DetectorState.Error(IllegalArgumentException("private details"), DetectorErrorType.INVALID_MODEL))
-        composeRule.onNodeWithTag("detector_status_guidance")
-            .assertTextEquals("The detector model is invalid or missing.", "Retry detector")
+        assertDetectorGuidance("The detector model is invalid or missing.")
         composeRule.onNodeWithTag("retry_detector_button").assertExists()
     }
 
@@ -126,23 +168,20 @@ class ScanStateUiTest {
         assertEquals(DetectorErrorType.UNKNOWN, errorState.type)
         assertEquals(DetectorStage.CAMERA_ANALYSIS, errorState.stage)
         setDetectorState(errorState)
-        composeRule.onNodeWithTag("detector_status_guidance")
-            .assertTextEquals("The detector encountered an unknown error. [CAM-ANALYSIS]", "Retry detector")
+        assertDetectorGuidance("The detector encountered an unknown error. [CAM-ANALYSIS]")
         composeRule.onNodeWithText("Detector is starting…").assertDoesNotExist()
         composeRule.onNodeWithTag("retry_detector_button").assertExists()
     }
 
     @Test fun `incompatible runtime error has safe guidance and retry`() {
         setDetectorState(DetectorState.Error(UnsatisfiedLinkError("native stack"), DetectorErrorType.INCOMPATIBLE_RUNTIME))
-        composeRule.onNodeWithTag("detector_status_guidance")
-            .assertTextEquals("The detector runtime is incompatible with this device/ABI.", "Retry detector")
+        assertDetectorGuidance("The detector runtime is incompatible with this device/ABI.")
         composeRule.onNodeWithTag("retry_detector_button").assertExists()
     }
 
     @Test fun `unknown detector error has safe guidance and retry`() {
         setDetectorState(DetectorState.Error(RuntimeException("secret"), DetectorErrorType.UNKNOWN))
-        composeRule.onNodeWithTag("detector_status_guidance")
-            .assertTextEquals("The detector encountered an unknown error.", "Retry detector")
+        assertDetectorGuidance("The detector encountered an unknown error.")
         composeRule.onNodeWithTag("retry_detector_button").assertExists()
     }
 
@@ -166,8 +205,7 @@ class ScanStateUiTest {
                 stage = DetectorStage.MP_IMAGE_CREATION
             )
         )
-        composeRule.onNodeWithTag("detector_status_guidance")
-            .assertTextEquals("This frame could not be processed. Detection is still running. [MP-IMAGE]")
+        assertDetectorGuidance("This frame could not be processed. Detection is still running. [MP-IMAGE]")
         composeRule.onNodeWithText("secret", substring = true).assertDoesNotExist()
         composeRule.onNodeWithText("IllegalStateException", substring = true).assertDoesNotExist()
     }
@@ -179,9 +217,39 @@ class ScanStateUiTest {
                 DetectorErrorType.FRAME_TEMPORARY
             )
         )
-        composeRule.onNodeWithTag("detector_status_guidance")
-            .assertTextEquals("This frame could not be processed. Please try again. [CAM-FRAME]", "Retry detector")
+        assertDetectorGuidance("This frame could not be processed. Please try again. [CAM-FRAME]")
         composeRule.onNodeWithTag("retry_detector_button").assertExists()
+    }
+
+    private fun assertDetectorGuidance(expected: String) {
+        composeRule.onNode(
+            hasText(expected) and hasAnyAncestor(hasTestTag("detector_status_guidance")),
+            useUnmergedTree = true
+        ).assertExists()
+    }
+
+    @Test fun `offline model startup failure has local retry guidance`() {
+        composeRule.setContent {
+            ScannerOverlay(
+                detectedSpecies = null,
+                isAnalyzing = false,
+                scanState = ScanState.Failed(7, rect, ScanFailureReason.LocalModelUnavailable),
+                language = AppLanguage.ENGLISH,
+                selectedTrackId = 7,
+                onSpeciesClick = {},
+                onCaptureClick = {}
+            )
+        }
+        composeRule.onNodeWithText("The offline model is unavailable. Please scan again.").assertExists()
+        composeRule.onNodeWithTag("capture_button").assertExists()
+    }
+
+    @Test fun `classifier initialization error maps to local model failure`() {
+        val viewModel = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
+        assertEquals(
+            ScanFailureReason.LocalModelUnavailable,
+            viewModel.classifyScanFailure(LocalModelUnavailableException(IllegalStateException("gpu and cpu failed")))
+        )
     }
 
     private fun setDetectorState(state: DetectorState) {

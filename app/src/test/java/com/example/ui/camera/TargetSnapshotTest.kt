@@ -11,6 +11,31 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class TargetSnapshotTest {
+    @Test fun squareExpansionContainsSpecimenAtEveryEdge() {
+        for ((w, h) in listOf(640 to 480, 480 to 640)) {
+            for (rect in listOf(RectF(0f, 0f, 80f, 200f), RectF(w - 80f, 0f, w.toFloat(), 200f),
+                RectF(0f, h - 200f, 80f, h.toFloat()), RectF(w - 80f, h - 200f, w.toFloat(), h.toFloat()),
+                RectF(0f, 0f, w.toFloat(), h.toFloat()))) {
+                val expanded = expandedSquareRect(rect, w, h)
+                assertEquals(expanded.width(), expanded.height(), .01f)
+                org.junit.Assert.assertTrue(expanded.contains(rect))
+                if (expanded.width() <= minOf(w, h)) {
+                    org.junit.Assert.assertTrue(RectF(0f, 0f, w.toFloat(), h.toFloat()).contains(expanded))
+                }
+            }
+        }
+    }
+
+    @Test fun allRotationsMapRawPixelsToUprightPositiveBounds() {
+        val expected = listOf(RectF(10f, 20f, 110f, 220f), RectF(260f, 10f, 460f, 110f),
+            RectF(530f, 260f, 630f, 460f), RectF(20f, 530f, 220f, 630f))
+        for ((index, degrees) in listOf(0, 90, 180, 270).withIndex()) {
+            val rect = RectF(10f, 20f, 110f, 220f)
+            uprightTransform(640, 480, degrees).mapRect(rect)
+            assertRect(expected[index], rect)
+        }
+    }
+
     private fun assertRect(expected: RectF, actual: RectF) {
         assertEquals(expected.left, actual.left, .01f)
         assertEquals(expected.top, actual.top, .01f)
