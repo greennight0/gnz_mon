@@ -18,7 +18,7 @@ import kotlin.math.abs
 class TrackingUnitTest {
 
     @Test
-    fun emptyDetectorResultDoesNotCreateOrRetainSelectableTargets() {
+    fun emptyDetectorResultTemporarilyRetainsSelectionWithoutSelectableTargets() {
         val viewModel = MainViewModel(RuntimeEnvironment.getApplication())
         assertTrue(viewModel.trackedObjects.value.isEmpty())
 
@@ -35,9 +35,9 @@ class TrackingUnitTest {
         viewModel.onObjectsTracked(emptyList(), 11)
 
         assertTrue(viewModel.trackedObjects.value.isEmpty())
-        assertEquals(null, viewModel.selectedTrackId.value)
+        assertEquals(detected.id, viewModel.selectedTrackId.value)
         viewModel.selectNextTrack()
-        assertEquals(null, viewModel.selectedTrackId.value)
+        assertEquals(detected.id, viewModel.selectedTrackId.value)
     }
 
     @Test

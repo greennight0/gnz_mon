@@ -4,11 +4,11 @@ import android.graphics.RectF
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.test.click
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertContentDescriptionEquals
-import androidx.compose.ui.test.assertDoesNotExist
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTopPositionInRootIsEqualTo
@@ -39,7 +39,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(qualifiers = "w400dp-h900dp-mdpi", sdk = [36])
 class TrackSelectorTest {
     @get:Rule
     val composeRule = createComposeRule()
@@ -70,6 +70,12 @@ class TrackSelectorTest {
         mysteriaFactEn = "Test fact",
         mysteriaFactVi = "Thông tin kiểm thử"
     )
+
+    private fun canvasPoint(x: Float, y: Float): Offset {
+        composeRule.waitForIdle()
+        val bounds = composeRule.onNodeWithTag("bounding_box_canvas").fetchSemanticsNode().boundsInRoot
+        return Offset(bounds.width * x, bounds.height * y)
+    }
 
     private fun setOverlayContent(onSelectionChanged: (Int?) -> Unit) {
         var selectedId by mutableStateOf<Int?>(null)
@@ -102,7 +108,7 @@ class TrackSelectorTest {
         composeRule.onNodeWithText("DeepSORT", substring = true).assertDoesNotExist()
         composeRule.onNodeWithTag("app_brand_badge")
             .assertExists()
-            .assertTopPositionInRootIsEqualTo(36.dp)
+            .assertTopPositionInRootIsEqualTo(36.dp + 6.dp) // Header inset plus badge content padding.
     }
 
     @Test
@@ -162,8 +168,9 @@ class TrackSelectorTest {
         }
 
         composeRule.onNodeWithTag("bounding_box_canvas")
-            .performTouchInput { click(Offset(100f, 600f)) }
+            .performTouchInput { click(Offset(width * 0.25f, height * 0.75f)) }
 
+        composeRule.waitForIdle()
         assertEquals(0.25f, createdTarget?.first ?: -1f, 0.001f)
         assertEquals(0.75f, createdTarget?.second ?: -1f, 0.001f)
     }
@@ -191,10 +198,11 @@ class TrackSelectorTest {
             )
         }
 
-        val boxCenter = Offset(160f, 320f)
+        val boxCenter = canvasPoint(0.4f, 0.4f)
         composeRule.onNodeWithTag("bounding_box_canvas").performTouchInput { click(boxCenter) }
         composeRule.onNodeWithTag("bounding_box_canvas").performTouchInput { click(boxCenter) }
 
+        composeRule.waitForIdle()
         assertEquals(listOf(42, null), selections)
         assertEquals(emptyList<Pair<Float, Float>>(), creations)
     }
@@ -212,6 +220,7 @@ class TrackSelectorTest {
         composeRule.onNodeWithTag("bounding_box_canvas")
             .performTouchInput { click(Offset(20f, 400f)) }
 
+        composeRule.waitForIdle()
         assertEquals(listOf(42), selections)
         composeRule.onNodeWithTag("bounding_box_target_42").assertIsSelected()
         composeRule.onNodeWithTag("capture_button").assertExists()
@@ -337,12 +346,13 @@ class TrackSelectorTest {
             )
         }
 
-        val originalCenter = Offset(160f, 320f)
+        val originalCenter = canvasPoint(0.4f, 0.4f)
         composeRule.onNodeWithTag("bounding_box_canvas").performTouchInput { down(originalCenter) }
-        boxes = listOf(trackedBox.copy(normalizedRect = RectF(0.7f, 0.7f, 0.9f, 0.9f)))
+        composeRule.runOnIdle { boxes = listOf(trackedBox.copy(normalizedRect = RectF(0.7f, 0.7f, 0.9f, 0.9f))) }
         composeRule.mainClock.advanceTimeByFrame()
         composeRule.onNodeWithTag("bounding_box_canvas").performTouchInput { up() }
 
+        composeRule.waitForIdle()
         assertEquals(listOf(42), selections)
     }
 
@@ -419,6 +429,35 @@ class TrackSelectorTest {
         viewModel.onObjectsTracked(listOf(target.copy(normalizedRect = RectF(0.22f, 0.25f, 0.62f, 0.55f))), 16)
         assertEquals(10, viewModel.selectedTrackId.value)
         assertEquals(true, viewModel.trackedObjects.value.single().isSelected)
+    }
+
+    @Test
+    fun targetLockExpiresOnFourthMissingFrameAndResetsAfterReturn() {
+        val viewModel = MainViewModel(RuntimeEnvironment.getApplication())
+        val target = trackedBox.copy(id = 10)
+        viewModel.onObjectsTracked(listOf(target), 16)
+        viewModel.selectTrack(10)
+        repeat(3) { viewModel.onObjectsTracked(emptyList(), 16) }
+        assertEquals(10, viewModel.selectedTrackId.value)
+        viewModel.onObjectsTracked(listOf(target), 16)
+        repeat(3) { viewModel.onObjectsTracked(emptyList(), 16) }
+        assertEquals(10, viewModel.selectedTrackId.value)
+        viewModel.onObjectsTracked(emptyList(), 16)
+        assertEquals(null, viewModel.selectedTrackId.value)
+    }
+
+    @Test
+    fun hitTestRejectsPointsBeyondAllDisplayedEdges() {
+        val tiny = trackedBox.copy(normalizedRect = RectF(0.25f, 0.25f, 0.26f, 0.255f))
+        val rect = displayedTrackedRect(tiny, 400f, 800f, 60f)
+        listOf(
+            Offset(rect.left - 0.01f, rect.center.y),
+            Offset(rect.right + 0.01f, rect.center.y),
+            Offset(rect.center.x, rect.top - 0.01f),
+            Offset(rect.center.x, rect.bottom + 0.01f)
+        ).forEach { point ->
+            assertEquals(null, hitTestTrackedBoxes(point, listOf(tiny), null, 400f, 800f, 0f, 60f, 48f, 0f))
+        }
     }
 
     @Test

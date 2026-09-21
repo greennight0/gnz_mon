@@ -4,6 +4,15 @@ package com.example.data.model
 sealed interface RecognitionResult {
     data class Organism(val species: SpeciesInfo) : RecognitionResult
 
+    data class Candidate(val scientificName: String, val score: Float)
+
+    data class Uncertain(val candidates: List<Candidate>) : RecognitionResult {
+        init {
+            require(candidates.size <= 3)
+            require(candidates.all { it.score.isFinite() && it.score in 0f..1f })
+        }
+    }
+
     data class NotOrganism(
         val label: String,
         val confidence: Int

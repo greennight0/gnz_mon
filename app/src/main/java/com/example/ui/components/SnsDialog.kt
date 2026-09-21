@@ -181,7 +181,8 @@ fun SnsDialog(
                 LazyColumn(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth(),
+                        .fillMaxWidth()
+                        .testTag("sns_links_list"),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(socialLinks, key = { it.id }) { link ->

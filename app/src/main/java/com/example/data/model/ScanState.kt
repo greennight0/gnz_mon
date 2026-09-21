@@ -13,9 +13,8 @@ sealed interface ScanState {
 
     data class CapturingFrame(override val trackId: Int, override val snapshotRect: RectF) : Tracked
     data class CroppingTarget(override val trackId: Int, override val snapshotRect: RectF) : Tracked
-    data class EncodingImage(override val trackId: Int, override val snapshotRect: RectF) : Tracked
-    data class Uploading(override val trackId: Int, override val snapshotRect: RectF) : Tracked
-    data class Analyzing(override val trackId: Int, override val snapshotRect: RectF) : Tracked
+    data class PreparingImage(override val trackId: Int, override val snapshotRect: RectF) : Tracked
+    data class Classifying(override val trackId: Int, override val snapshotRect: RectF) : Tracked
     data class Completed(
         override val trackId: Int,
         override val snapshotRect: RectF,
@@ -30,24 +29,8 @@ sealed interface ScanState {
 
 /** Stable error categories used by both UI localization and tests. */
 sealed interface ScanFailureReason {
-    data class Http(val statusCode: Int) : ScanFailureReason
-    data object Timeout : ScanFailureReason
-    data object Dns : ScanFailureReason
-    data object Tls : ScanFailureReason
-    data object ConnectionRefused : ScanFailureReason
-    /** Used only when Android has confirmed that no network is currently available. */
-    data object Network : ScanFailureReason
-    data object Io : ScanFailureReason
-    data object EmptyResponse : ScanFailureReason
+    data object LocalModelUnavailable : ScanFailureReason
     data object InvalidResponse : ScanFailureReason
-    data object MalformedJson : ScanFailureReason
-    data object TruncatedResponse : ScanFailureReason
-    data object SafetyBlocked : ScanFailureReason
-    data object NoCandidates : ScanFailureReason
-    data object MissingContent : ScanFailureReason
-    data class MissingRequiredField(val field: String) : ScanFailureReason
-    data class UnknownCategory(val category: String) : ScanFailureReason
-    data class InconsistentTaxonomy(val category: String, val kingdom: String) : ScanFailureReason
     data object Unexpected : ScanFailureReason
     data class LowConfidence(val confidence: Int) : ScanFailureReason
 }
@@ -57,4 +40,4 @@ class ScanException(
     cause: Throwable? = null
 ) : Exception(reason.toString(), cause)
 
-enum class ScanTransportPhase { ENCODING, UPLOADING, ANALYZING }
+enum class ScanTransportPhase { PREPARING, CLASSIFYING }

@@ -19,6 +19,7 @@ import com.example.data.model.ScanException
 import com.example.data.model.ScanFailureReason
 import com.example.data.model.ScanState
 import com.example.data.model.ScanTransportPhase
+import com.example.data.classifier.LocalModelUnavailableException
 import com.example.data.repository.SpeciesRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -56,7 +57,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = SpeciesRepository(application)
 
-    internal var identifyImage = repository::identifyImage
+    internal var identifyImage: suspend (Bitmap, (ScanTransportPhase) -> Unit) -> RecognitionResult = repository::identifyImage
 
     // Current detected species showing on the live camera viewfinder
     private val _detectedSpecies = MutableStateFlow<SpeciesInfo?>(null)
@@ -181,10 +182,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _detectedSpecies.value = validSelectedId?.let { _boxSpeciesMap.value[it] }
         } else {
             _trackedObjects.value = emptyList()
-            _selectedTrackId.value = null
             _detectedSpecies.value = null
-            lockedTargetRect = null
-            missedLockedTargetFrames = 0
+            if (currentSelectedId == null || ++missedLockedTargetFrames > TARGET_LOCK_MISSED_FRAME_TIMEOUT) {
+                _selectedTrackId.value = null
+                lockedTargetRect = null
+                missedLockedTargetFrames = 0
+            }
         }
     }
 
@@ -233,6 +236,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun selectTrack(trackId: Int?) {
         _notOrganism.value = null
+        if (_scanState.value is ScanState.Completed) _scanState.value = ScanState.Idle
         val validTrackId = trackId?.takeIf { id -> _trackedObjects.value.any { it.id == id } }
         _selectedTrackId.value = validTrackId
         lockedTargetRect = validTrackId
@@ -277,6 +281,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun createOrMoveTargetBox(normCenterX: Float, normCenterY: Float) {
         _notOrganism.value = null
+        if (_scanState.value is ScanState.Completed) _scanState.value = ScanState.Idle
         val halfW = 0.20f
         val halfH = 0.16f
         val clampedL = (normCenterX - halfW).coerceIn(0.04f, 0.96f - halfW * 2)
@@ -342,14 +347,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         _detectedSpecies.value = null
         _notOrganism.value = null
+        clearSpeciesForTarget(currentId)
+        _scanState.value = ScanState.Idle
     }
 
     fun reportRecognitionError(error: Throwable = IllegalStateException("Image recognition failed")) {
+        (_scanState.value as? ScanState.CapturingFrame)?.let { capture ->
+            runningTrackIds.remove(capture.trackId)
+            captureReservations.remove(capture.trackId)
+            _scanState.value = ScanState.Failed(capture.trackId, capture.snapshotRect, ScanFailureReason.Unexpected)
+        }
         _recognitionError.value = error
     }
 
     fun beginCapture(trackId: Int, snapshotRect: RectF): Boolean {
-        if (trackId in runningTrackIds) return false
+        if (runningTrackIds.isNotEmpty()) return false
+        clearSpeciesForTarget(trackId)
+        _notOrganism.value = null
         runningTrackIds += trackId
         captureReservations += trackId
         _scanState.value = ScanState.CapturingFrame(trackId, RectF(snapshotRect))
@@ -384,9 +398,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     request.croppedBitmap
                 ) { phase ->
                     _scanState.value = when (phase) {
-                        ScanTransportPhase.ENCODING -> ScanState.EncodingImage(targetId, snapshotRect)
-                        ScanTransportPhase.UPLOADING -> ScanState.Uploading(targetId, snapshotRect)
-                        ScanTransportPhase.ANALYZING -> ScanState.Analyzing(targetId, snapshotRect)
+                        ScanTransportPhase.PREPARING -> ScanState.PreparingImage(targetId, snapshotRect)
+                        ScanTransportPhase.CLASSIFYING -> ScanState.Classifying(targetId, snapshotRect)
                     }
                 }
                 when (result) {
@@ -399,6 +412,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     }
+                    is RecognitionResult.Uncertain -> clearSpeciesForTarget(targetId)
                     is RecognitionResult.NotOrganism -> {
                         _notOrganism.value = result
                         clearSpeciesForTarget(targetId)
@@ -432,9 +446,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     internal fun classifyScanFailure(error: Throwable): ScanFailureReason = when (error) {
+        is LocalModelUnavailableException -> ScanFailureReason.LocalModelUnavailable
         is ScanException -> error.reason
-        is SocketTimeoutException -> ScanFailureReason.Timeout
-        is IOException -> ScanFailureReason.Network
         is JSONException, is IllegalArgumentException -> ScanFailureReason.InvalidResponse
         else -> error.cause?.takeIf { it !== error }?.let(::classifyScanFailure)
             ?: ScanFailureReason.Unexpected

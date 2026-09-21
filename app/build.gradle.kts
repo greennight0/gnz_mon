@@ -1,41 +1,26 @@
 import com.android.build.api.artifact.SingleArtifact
-import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 import java.util.Locale
-import java.net.URI
 
 // This is the single build-time source of truth for both BuildConfig and model validation.
 val detectorModelAsset = "models/nature_scope_efficientdet_lite0_int8.tflite"
 val detectorModelManifest = "models/nature_scope_efficientdet_lite0_int8.manifest.json"
 val minimumDetectorModelBytes = 1_000_000L
 val detectorModelSha256 = "0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb"
-val configuredBackendEndpoint = providers.gradleProperty("GNZ_MON_BACKEND_ENDPOINT")
-val releaseRequested = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
-if (releaseRequested && !configuredBackendEndpoint.isPresent) {
-  throw GradleException(
-    "Release builds require -PGNZ_MON_BACKEND_ENDPOINT=https://<deployed-host>/v1/species/identify"
-  )
-}
-val backendEndpoint = configuredBackendEndpoint.orElse("https://api.gnzmon.app/v1/species/identify")
-val suppliedEndpoint = configuredBackendEndpoint.orNull
-if (suppliedEndpoint != null) {
-  val uri = runCatching { URI(suppliedEndpoint) }.getOrNull()
-  val sampleTokens = listOf("<host>", "example.com", "localhost", "127.0.0.1", "api.gnzmon.app")
-  require(
-    uri?.scheme.equals("https", ignoreCase = true) &&
-      !uri?.host.isNullOrBlank() &&
-      uri?.userInfo == null &&
-      sampleTokens.none { suppliedEndpoint.contains(it, ignoreCase = true) }
-  ) {
-    "GNZ_MON_BACKEND_ENDPOINT must be a deployed HTTPS URL with a valid host, not a sample/default value"
-  }
-}
+val speciesClassifierAsset = "models/plantnet.tflite"
+val speciesClassifierManifest = "models/plantnet.manifest.json"
+val speciesClassifierLabels = "models/plantnet_labels.txt"
+val speciesClassifierNotices = listOf(
+  "models/plantnet.LICENSE.txt",
+  "models/plantnet.APACHE-2.0.txt",
+  "models/plantnet.BSD-2-Clause.txt",
+)
+val speciesClassifierSha256 = "6f59f046c6a86593713aca76a3ab7bb55b520265eb66f5a77a114e450b1ccbf5"
 
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
-  alias(libs.plugins.google.services)
 }
 
 android {
@@ -44,14 +29,16 @@ android {
 
   defaultConfig {
     applicationId = "com.aistudio.gnzmon.wqrk"
-    minSdk = 24
+    minSdk = 26
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
 
+    ndk { abiFilters += setOf("arm64-v8a") }
+
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "DETECTOR_MODEL_ASSET", "\"$detectorModelAsset\"")
-    buildConfigField("String", "GNZ_MON_BACKEND_ENDPOINT", "\"${backendEndpoint.get()}\"")
+    buildConfigField("String", "SPECIES_CLASSIFIER_MODEL_ASSET", "\"$speciesClassifierAsset\"")
   }
 
   buildTypes {
@@ -70,6 +57,14 @@ android {
     compose = true
     buildConfig = true
   }
+  androidResources { noCompress += "tflite" }
+  packaging {
+    jniLibs.pickFirsts += setOf(
+      "**/libc++_shared.so",
+      "**/libtensorflowlite_jni.so",
+      "**/libtensorflowlite_gpu_jni.so"
+    )
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
@@ -77,21 +72,20 @@ android {
   }
 }
 
-googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
-
-// Some unused dependencies are commented out below instead of being removed.
-// This makes it easy to add them back in the future if needed.
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
-  implementation(platform(libs.firebase.bom))
   implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.camera.camera2)
   implementation(libs.androidx.camera.core)
   implementation(libs.androidx.camera.lifecycle)
   implementation(libs.androidx.camera.view)
-  // The sole production detector runtime. Gemini remains species recognition, not detection.
+  // MediaPipe detects regions; LiteRT classifies the selected crop with PlantNet-300K.
   implementation(libs.mediapipe.tasks.vision)
+  implementation(libs.litert) {
+    // The model is packaged in assets; Play Asset Delivery and WorkManager are not used.
+    exclude(group = "com.google.android.play", module = "asset-delivery")
+  }
   implementation(libs.androidx.compose.material.icons.core)
   implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.androidx.compose.material3)
@@ -103,30 +97,11 @@ dependencies {
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
-  // implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
-  implementation(libs.coil.compose)
-  implementation(libs.converter.moshi)
-  implementation(libs.firebase.ai)
-  // Uncomment to use Firestore:
-  // implementation(libs.firebase.firestore)
-
-  // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google
-  // Sign-In via Credential Manager:
-  // implementation(libs.firebase.auth)
-  // implementation(libs.androidx.credentials)
-  // implementation(libs.androidx.credentials.play.services)
-  // implementation(libs.googleid)
-  implementation(libs.firebase.appcheck.recaptcha)
-  implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
-  implementation(libs.okhttp)
-  // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
@@ -154,6 +129,7 @@ androidComponents {
       if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString()
     }
     val modelFile = layout.projectDirectory.file("src/main/assets/$detectorModelAsset")
+    val classifierFile = layout.projectDirectory.file("src/main/assets/$speciesClassifierAsset")
     val validateModel = tasks.register<ValidateDetectorModelTask>(
       "validate${capitalizedVariant}DetectorModel",
     ) {
@@ -200,11 +176,62 @@ androidComponents {
       expectedSha256.set(detectorModelSha256)
       archives.from(variant.artifacts.get(SingleArtifact.BUNDLE))
     }
+    val validateClassifier = tasks.register<ValidateClassifierModelTask>(
+      "validate${capitalizedVariant}SpeciesClassifier"
+    ) {
+      group = "verification"
+      this.modelFile.set(classifierFile)
+      manifestFile.set(layout.projectDirectory.file("src/main/assets/$speciesClassifierManifest"))
+      labelsFile.set(layout.projectDirectory.file("src/main/assets/$speciesClassifierLabels"))
+      expectedLabelCount.set(1081)
+      expectedByteCount.set(46_942_600L)
+      expectedSha256.set(speciesClassifierSha256)
+    }
+    val verifyClassifierApk = tasks.register<VerifyDetectorModelArchiveTask>(
+      "verify${capitalizedVariant}PlantNetApk"
+    ) {
+      group = "verification"
+      variantName.set(variant.name)
+      archiveKind.set("APK")
+      expectedAssetPath.set("assets/$speciesClassifierAsset")
+      minimumByteCount.set(46_000_000L)
+      expectedManifestPath.set("assets/$speciesClassifierManifest")
+      expectedSha256.set(speciesClassifierSha256)
+      requiredAssetPaths.set(listOf("assets/$speciesClassifierLabels") + speciesClassifierNotices.map { "assets/$it" })
+      expectedTfliteAssetPaths.set(listOf("assets/$detectorModelAsset", "assets/$speciesClassifierAsset"))
+      val apkDirectory = variant.artifacts.get(SingleArtifact.APK)
+      archives.from(apkDirectory.map { directory ->
+        directory.asFileTree.matching { include("*.apk") }
+      })
+    }
+    val verifyClassifierBundle = tasks.register<VerifyDetectorModelArchiveTask>(
+      "verify${capitalizedVariant}PlantNetBundle"
+    ) {
+      group = "verification"
+      variantName.set(variant.name)
+      archiveKind.set("AAB")
+      expectedAssetPath.set("assets/$speciesClassifierAsset")
+      minimumByteCount.set(46_000_000L)
+      expectedManifestPath.set("assets/$speciesClassifierManifest")
+      expectedSha256.set(speciesClassifierSha256)
+      requiredAssetPaths.set(listOf("assets/$speciesClassifierLabels") + speciesClassifierNotices.map { "assets/$it" })
+      expectedTfliteAssetPaths.set(listOf("assets/$detectorModelAsset", "assets/$speciesClassifierAsset"))
+      archives.from(variant.artifacts.get(SingleArtifact.BUNDLE))
+    }
     tasks.matching { it.name == "assemble$capitalizedVariant" }.configureEach {
-      finalizedBy(verifyApkArchive)
+      dependsOn(validateClassifier)
+      finalizedBy(verifyApkArchive, verifyClassifierApk)
     }
     tasks.matching { it.name == "bundle$capitalizedVariant" }.configureEach {
-      finalizedBy(verifyBundleArchive)
+      dependsOn(validateClassifier)
+      finalizedBy(verifyBundleArchive, verifyClassifierBundle)
     }
   }
+}
+
+// Robolectric Android 36 requires Java 21; APK builds still support JDK 17.
+tasks.withType<Test>().configureEach {
+  javaLauncher.set(javaToolchains.launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(21))
+  })
 }
