@@ -9,4 +9,6 @@ fun interface SpeciesClassifier {
         bitmap: Bitmap,
         onPhase: (ScanTransportPhase) -> Unit
     ): RecognitionResult
+    suspend fun classifyPair(bitmap: Bitmap, expanded: Bitmap, onPhase: (ScanTransportPhase) -> Unit): RecognitionResult =
+        classify(bitmap, onPhase)
 }

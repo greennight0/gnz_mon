@@ -44,6 +44,56 @@ class ScanStateUiTest {
     private val rect = RectF(.2f, .2f, .8f, .8f)
     private val thumbnail = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
 
+    @Test fun `common fruit card has no invented species or confidence badge`() {
+        composeRule.setContent {
+            ScannerOverlay(detectedSpecies = null, isAnalyzing = false,
+                scanState = ScanState.Completed(7, rect,
+                    com.example.data.model.RecognitionResult.CommonPlant("banana", "Chuối", "Banana", .99f)),
+                language = AppLanguage.VIETNAMESE, onSpeciesClick = {}, onCaptureClick = {})
+        }
+        composeRule.onNodeWithText("Chuối").assertExists()
+        composeRule.onNodeWithText("99%", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Cucurbita", substring = true).assertDoesNotExist()
+    }
+
+    @Test fun `only selected target gets a visible badge and semantic box`() {
+        composeRule.setContent {
+            ScannerOverlay(detectedSpecies = null, isAnalyzing = false,
+                language = AppLanguage.VIETNAMESE,
+                trackedObjects = listOf(1,2,3).map {
+                    com.example.data.model.TrackedBoundingBox(it, rect, "Target", .9f)
+                }, selectedTrackId = 2, onSpeciesClick = {}, onCaptureClick = {})
+        }
+        composeRule.onNodeWithTag("box_header_tag_2").assertExists()
+        composeRule.onNodeWithTag("box_header_tag_1").assertDoesNotExist()
+        composeRule.onNodeWithTag("box_header_tag_3").assertDoesNotExist()
+        composeRule.onNodeWithText("TRK", substring = true).assertDoesNotExist()
+    }
+
+    @Test fun `late recognition cannot attach to newly selected target`() = runBlocking {
+        val model = MainViewModel(ApplicationProvider.getApplicationContext<Application>())
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var started = false
+        model.onObjectsTracked(listOf(1, 2).map {
+            com.example.data.model.TrackedBoundingBox(it, rect, "Target", .9f)
+        }, 16)
+        model.selectTrack(1)
+        model.identifyImage = { _, _ ->
+            started = true
+            gate.await()
+            com.example.data.model.RecognitionResult.CommonPlant("banana", "Chuối", "Banana", .9f)
+        }
+        model.analyzeImage(ScanRequest(1, thumbnail, rect))
+        kotlinx.coroutines.withTimeout(5_000) { while (!started) delay(10) }
+        model.selectTrack(2)
+        gate.complete(Unit)
+        kotlinx.coroutines.withTimeout(5_000) { while (model.isAnalyzing.value) delay(10) }
+        assertEquals(2, model.selectedTrackId.value)
+        assertEquals(ScanState.Idle, model.scanState.value)
+        assertEquals(null, model.detectedSpecies.value)
+        assertTrue(model.boxSpeciesMap.value.isEmpty())
+    }
+
     @Test fun `uncertain UI is localized and does not claim non organism`() {
         var language by androidx.compose.runtime.mutableStateOf(AppLanguage.VIETNAMESE)
         val result = com.example.data.model.RecognitionResult.Uncertain(listOf(
@@ -68,6 +118,25 @@ class ScanStateUiTest {
         model.reportRecognitionError(IllegalStateException("Capture failed"))
         assertTrue(model.scanState.value is ScanState.Failed)
         assertTrue(model.beginCapture(7, rect))
+    }
+
+    @Test fun `missing camera transform reports capture failure and releases reservation`() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        val model = MainViewModel(application)
+        val controller = com.example.ui.camera.CameraController(application,
+            onImageCaptured = { error("Unexpected full-frame capture") },
+            onError = model::reportRecognitionError)
+        try {
+            controller.previewView = androidx.camera.view.PreviewView(application).apply {
+                layout(0, 0, 400, 800)
+            }
+            assertTrue(model.beginCapture(7, rect))
+            controller.captureTarget(com.example.ui.camera.TargetCaptureRequest(7, RectF(20f, 20f, 120f, 220f))) {
+                error("A preview with no sensor transform must not produce a snapshot")
+            }
+            assertTrue(model.scanState.value is ScanState.Failed)
+            assertTrue(model.beginCapture(7, rect))
+        } finally { controller.release() }
     }
 
     @Test fun `uncertain result clears previously identified target and rescan clears suggestions`() = runBlocking {

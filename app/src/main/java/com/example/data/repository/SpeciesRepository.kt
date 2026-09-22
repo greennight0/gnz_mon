@@ -2,7 +2,7 @@ package com.example.data.repository
 
 import android.content.Context
 import android.graphics.Bitmap
-import com.example.data.classifier.OnDeviceSpeciesClassifier
+import com.example.data.classifier.CommonPlantClassifier
 import com.example.data.classifier.SpeciesClassifier
 import com.example.data.local.AppDatabase
 import com.example.data.local.SpeciesDao
@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.Flow
 
 class SpeciesRepository(
     context: Context,
-    classifierFactory: (Context) -> SpeciesClassifier = { OnDeviceSpeciesClassifier.create(it) }
+    classifierFactory: (Context) -> SpeciesClassifier = { CommonPlantClassifier.create(it) }
 ) {
 
     private val speciesDao: SpeciesDao = AppDatabase.getDatabase(context).speciesDao()
@@ -48,6 +48,13 @@ class SpeciesRepository(
         if (result is RecognitionResult.Organism) {
             saveSpeciesToJournal(result.species)
         }
+        return result
+    }
+
+    suspend fun identifyPair(bitmap: Bitmap, expanded: Bitmap,
+        onPhase: (ScanTransportPhase) -> Unit = {}): RecognitionResult {
+        val result = speciesClassifier.classifyPair(bitmap, expanded, onPhase)
+        if (result is RecognitionResult.Organism) saveSpeciesToJournal(result.species)
         return result
     }
 

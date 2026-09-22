@@ -198,7 +198,7 @@ androidComponents {
       expectedManifestPath.set("assets/$speciesClassifierManifest")
       expectedSha256.set(speciesClassifierSha256)
       requiredAssetPaths.set(listOf("assets/$speciesClassifierLabels") + speciesClassifierNotices.map { "assets/$it" })
-      expectedTfliteAssetPaths.set(listOf("assets/$detectorModelAsset", "assets/$speciesClassifierAsset"))
+      expectedTfliteAssetPaths.set(listOf("assets/$detectorModelAsset", "assets/$speciesClassifierAsset", "assets/models/common_plant.tflite"))
       val apkDirectory = variant.artifacts.get(SingleArtifact.APK)
       archives.from(apkDirectory.map { directory ->
         directory.asFileTree.matching { include("*.apk") }
@@ -215,16 +215,33 @@ androidComponents {
       expectedManifestPath.set("assets/$speciesClassifierManifest")
       expectedSha256.set(speciesClassifierSha256)
       requiredAssetPaths.set(listOf("assets/$speciesClassifierLabels") + speciesClassifierNotices.map { "assets/$it" })
-      expectedTfliteAssetPaths.set(listOf("assets/$detectorModelAsset", "assets/$speciesClassifierAsset"))
+      expectedTfliteAssetPaths.set(listOf("assets/$detectorModelAsset", "assets/$speciesClassifierAsset", "assets/models/common_plant.tflite"))
       archives.from(variant.artifacts.get(SingleArtifact.BUNDLE))
     }
+    val validateCommon = tasks.register<ValidateCommonPlantModelTask>("validate${capitalizedVariant}CommonPlant") {
+      modelDirectory.set(layout.projectDirectory.dir("src/main/assets/models"))
+    }
+    tasks.matching { it.name == "merge${capitalizedVariant}Assets" }.configureEach { dependsOn(validateCommon) }
+    fun registerCommonArchive(kind: String) = tasks.register<VerifyDetectorModelArchiveTask>("verify${capitalizedVariant}CommonPlant$kind") {
+      variantName.set(variant.name)
+      archiveKind.set(kind)
+      expectedAssetPath.set("assets/models/common_plant.tflite")
+      minimumByteCount.set(18_000_000L)
+      expectedManifestPath.set("assets/models/common_plant.manifest.json")
+      expectedSha256.set("6c7ab0a6e5dcbf38a8c33b960996a55a3b4300b36a018c4545801de3a3c8bde0")
+      requiredAssetPaths.set(listOf("assets/models/common_plant_labels.txt", "assets/models/common_plant.LICENSE.txt"))
+      if (kind == "Apk") archives.from(variant.artifacts.get(SingleArtifact.APK).map { dir -> dir.asFileTree.matching { include("*.apk") } })
+      else archives.from(variant.artifacts.get(SingleArtifact.BUNDLE))
+    }
+    val verifyCommonApk = registerCommonArchive("Apk")
+    val verifyCommonBundle = registerCommonArchive("Bundle")
     tasks.matching { it.name == "assemble$capitalizedVariant" }.configureEach {
       dependsOn(validateClassifier)
-      finalizedBy(verifyApkArchive, verifyClassifierApk)
+      finalizedBy(verifyApkArchive, verifyClassifierApk, verifyCommonApk)
     }
     tasks.matching { it.name == "bundle$capitalizedVariant" }.configureEach {
       dependsOn(validateClassifier)
-      finalizedBy(verifyBundleArchive, verifyClassifierBundle)
+      finalizedBy(verifyBundleArchive, verifyClassifierBundle, verifyCommonBundle)
     }
   }
 }

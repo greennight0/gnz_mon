@@ -26,7 +26,10 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 
 Cổng PlantNet kiểm tra model TFLite 46.942.600 byte, checksum đã pin, contract
 `[1,3,224,224] → [1,1081]`, label map 1.081 dòng, manifest và toàn bộ thông báo giấy phép. Archive
-chỉ được chứa hai model: EfficientDet detector và PlantNet classifier.
+chỉ được chứa ba model: EfficientDet detector, PlantNet classifier và EfficientNet-Lite0 classifier phổ thông.
+`validateDebugCommonPlant` kiểm tra checksum, kích thước và nhãn mô hình bổ sung;
+`verifyDebugCommonPlantApk` / `verifyDebugCommonPlantBundle` kiểm tra nội dung đã đóng gói.
+Xem [kiểm chứng cây/quả và tracking](common-plant-recognition.md) cho bộ benchmark mới.
 
 APK debug: `app/build/outputs/apk/debug/app-debug.apk`.
 
@@ -42,12 +45,24 @@ Nếu có thiết bị, chạy golden inference và các test thiết bị:
 ```
 
 Golden test dùng ảnh `images/1.jpg` từ repository PlantNet-300K, kiểm tra top-1
-`Cirsium vulgare (Savi) Ten.` và các logits tham chiếu trong tolerance cho phép.
+`Cirsium vulgare (Savi) Ten.` qua pipeline Android. Một bài riêng dùng tensor cố định để đối chiếu
+toàn bộ logits với CPU tham chiếu, tránh đánh đồng phép resize của Pillow với Android Canvas.
+Xem [đánh giá nhận diện](recognition-validation.md) để chạy benchmark so sánh cách cắt ảnh cũ/mới,
+chuẩn bị JSON có nhãn và lấy báo cáo từ thiết bị.
+
+Để xuất riêng ảnh giao diện Việt/Anh vào `app/build/reports/recognition`:
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest --tests com.example.UncertainScreenshotTest '-Proborazzi.test.record=true'
+```
 
 ## Checklist chế độ máy bay
 
 1. Bật chế độ máy bay rồi mở ứng dụng.
-2. Chụp/chọn ảnh thực vật và xác nhận detector → crop → classifier → UI → Room hoàn tất.
-3. Thử ảnh không rõ hoặc ngoài danh mục và xác nhận kết quả “Không xác định”.
+2. Chọn mẫu, bấm chụp và xác nhận `ImageCapture` chất lượng cao → giữ trọn vùng mẫu → classifier
+   → UI; chỉ kết quả đủ ngưỡng mới được lưu Room.
+3. Thử ảnh khó nhận diện; nếu không đủ ngưỡng, xác nhận thông báo chưa chắc chắn, tối đa 3 gợi ý
+   và hướng dẫn chụp lại. Gợi ý không được lưu nhật ký. Mô hình vẫn có thể đoán chắc nhưng sai
+   với mẫu ngoài danh mục; ghi nhận các trường hợp đó trong benchmark.
 4. Xác nhận lỗi model (nếu có) nói rõ model ngoại tuyến chưa sẵn sàng, không nhắc DNS/máy chủ.
 5. Chạy 100 lượt, ghi p95 GPU và bộ nhớ; mục tiêu GPU ≤ 500 ms và không tăng bộ nhớ liên tục.
