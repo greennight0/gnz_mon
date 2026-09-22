@@ -42,6 +42,7 @@ data class TrackedBoundingBox(
     val label: String,                   // Nhãn phân loại (Plant, Animal, Bird, Insect, Organism...)
     val confidence: Float,               // Độ tin cậy phát hiện (0.0f - 1.0f)
     val isSelected: Boolean = false,     // Đang được người dùng chọn để khóa mục tiêu
+    val isObserved: Boolean = true,
     val trackingFrames: Int = 1,         // Số khung hình đã liên kết bằng IoU hoặc khoảng cách tâm
     val velocityX: Float = 0f,           // Vận tốc tâm theo chiều ngang sau khi làm mượt bằng One Euro Filter
     val velocityY: Float = 0f,           // Vận tốc tâm theo chiều dọc sau khi làm mượt bằng One Euro Filter

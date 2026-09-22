@@ -16,11 +16,9 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
-import androidx.camera.view.transform.ImageProxyTransformFactory
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.camera.view.transform.CoordinateTransform
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -50,9 +48,25 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CoroutineDispatcher
 import com.example.BuildConfig
 
 internal const val FIRST_ANALYSIS_FRAME_TIMEOUT_MS = 5_000L
+
+/** A cancelled withContext must not discard a native graph created before dispatching back. */
+internal suspend fun createOwnedDetectorEngine(
+    dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    factory: () -> ObjectDetectorEngine
+): ObjectDetectorEngine {
+    var created: ObjectDetectorEngine? = null
+    try {
+        return withContext(dispatcher) { factory().also { created = it } }
+    } catch (cancelled: CancellationException) {
+        withContext(NonCancellable + dispatcher) { created?.close() }
+        throw cancelled
+    }
+}
 
 internal data class CameraUseCaseBindResult<T>(
     val camera: T,
@@ -150,12 +164,48 @@ class TargetCaptureRequest(val trackId: Int, previewRect: RectF) {
     fun copyPreviewRect(): RectF = RectF(storedPreviewRect)
 }
 
+/** Freeze the selected sensor region before the asynchronous capture starts. */
+internal class TargetCaptureGeometry(previewRect: RectF, sensorToView: Matrix?) {
+    private val sensorRect: RectF
+
+    init {
+        val viewToSensor = Matrix()
+        check(copyFiniteMatrix(sensorToView).invert(viewToSensor)) {
+            "Preview transformation cannot be inverted"
+        }
+        sensorRect = RectF(previewRect)
+        viewToSensor.mapRect(sensorRect)
+        requireUsableRect(sensorRect)
+    }
+
+    fun bufferRect(sensorToBuffer: Matrix?): RectF = RectF(sensorRect).also {
+        // Sensor-to-buffer includes the full image origin. Do not subtract image.cropRect.
+        copyFiniteMatrix(sensorToBuffer).mapRect(it)
+        requireUsableRect(it)
+    }
+
+    private fun copyFiniteMatrix(source: Matrix?): Matrix {
+        val copy = Matrix(checkNotNull(source) { "Camera transformation is not ready" })
+        val values = FloatArray(9)
+        copy.getValues(values)
+        check(values.all { it.isFinite() }) { "Camera transformation is invalid" }
+        return copy
+    }
+}
+
+private fun requireUsableRect(rect: RectF) {
+    require(listOf(rect.left, rect.top, rect.right, rect.bottom).all { it.isFinite() } && !rect.isEmpty) {
+        "Selected region is invalid"
+    }
+}
+
 class TargetSnapshot(
     val trackId: Int,
     val bitmap: Bitmap,
     sourceRect: RectF,
     val sourceImageSize: Size,
-    val source: TargetImageSource
+    val source: TargetImageSource,
+    val expandedBitmap: Bitmap? = null
 ) {
     private val storedSourceRect = RectF(sourceRect)
 
@@ -166,6 +216,10 @@ internal fun mapAndClampTargetRect(rect: RectF, transform: Matrix, width: Int, h
     val mapped = RectF(rect)
     transform.mapRect(mapped)
     require(width > 0 && height > 0)
+    requireUsableRect(mapped)
+    require(RectF.intersects(mapped, RectF(0f, 0f, width.toFloat(), height.toFloat()))) {
+        "Selected region is outside the captured image"
+    }
     val left = mapped.left.coerceIn(0f, (width - 1).toFloat())
     val top = mapped.top.coerceIn(0f, (height - 1).toFloat())
     return RectF(left, top, mapped.right.coerceIn(left + 1f, width.toFloat()),
@@ -250,64 +304,66 @@ class CameraController(
 
     /**
      * Captures exactly [request], never consulting the live tracker after this call. Preview
-     * pixels use PreviewView coordinates. An ImageCapture buffer is mapped with CameraX's
-     * OutputTransform pair, which includes crop, rotation, FILL_CENTER and front-camera mirror.
+     * pixels are mapped through the sensor into the full ImageCapture buffer. The click-time
+     * sensor region includes preview FILL_CENTER and mirroring, independently of buffer crop.
      */
     fun captureTarget(
         request: TargetCaptureRequest,
         onCaptured: (TargetSnapshot) -> Unit
     ) {
-        val targetTrackId = request.trackId
-        val targetRect = request.copyPreviewRect()
-        val view = previewView ?: return onError(IllegalStateException("Camera preview is not ready"))
-        val previewRect = mapAndClampTargetRect(targetRect, Matrix(), view.width, view.height)
-        // Copy the preview transform now: a later tracking/layout update cannot alter the request.
-        val previewTransform = view.outputTransform
-            ?: return onError(IllegalStateException("Preview transformation is not ready"))
-        val capture = imageCapture
-            ?: return onError(IllegalStateException("Camera capture is not ready"))
-        if (cameraExecutor.isShutdown) cameraExecutor = newExecutor("camera-capture")
-        capture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
-            override fun onCaptureSuccess(image: ImageProxy) {
-                try {
-                    val imageTransform = ImageProxyTransformFactory().apply {
-                        isUsingCropRect = true
-                        isUsingRotationDegrees = false
-                    }.getOutputTransform(image)
-                    val sourceRect = RectF(previewRect)
-                    CoordinateTransform(previewTransform, imageTransform).mapRect(sourceRect)
-                    val bitmap = image.toBitmap()
+        try {
+            val targetTrackId = request.trackId
+            val view = checkNotNull(previewView) { "Camera preview is not ready" }
+            val previewRect = mapAndClampTargetRect(request.copyPreviewRect(), Matrix(), view.width, view.height)
+            // CameraX matrices may change on later frames. Freeze the sensor region on main now.
+            val geometry = TargetCaptureGeometry(previewRect, view.sensorToViewTransform)
+            val capture = checkNotNull(imageCapture) { "Camera capture is not ready" }
+            // MainActivity handles orientation changes without recreating this use case.
+            capture.targetRotation = checkNotNull(view.display) { "Camera display is not ready" }.rotation
+            if (cameraExecutor.isShutdown) cameraExecutor = newExecutor("camera-capture")
+            capture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
                     try {
-                        val rotation = uprightTransform(bitmap.width, bitmap.height, image.imageInfo.rotationDegrees)
-                        val upright = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, rotation, true)
+                        val sourceRect = geometry.bufferRect(image.imageInfo.sensorToBufferTransformMatrix)
+                        val bitmap = image.toBitmap()
                         try {
-                            val rect = mapAndClampTargetRect(sourceRect, rotation, upright.width, upright.height)
-                            val captured = snapshot(targetTrackId, upright, rect, TargetImageSource.IMAGE_CAPTURE)
-                            ContextCompat.getMainExecutor(context).execute { onCaptured(captured) }
+                            val rotation = uprightTransform(bitmap.width, bitmap.height, image.imageInfo.rotationDegrees)
+                            val upright = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, rotation, true)
+                            try {
+                                val rect = mapAndClampTargetRect(sourceRect, rotation, upright.width, upright.height)
+                                val captured = snapshot(targetTrackId, upright, rect, TargetImageSource.IMAGE_CAPTURE)
+                                ContextCompat.getMainExecutor(context).execute { onCaptured(captured) }
+                            } finally {
+                                if (upright !== bitmap) upright.recycle()
+                            }
                         } finally {
-                            if (upright !== bitmap) upright.recycle()
+                            bitmap.recycle()
                         }
+                    } catch (e: Exception) {
+                        Log.e("CameraController", "Failed to capture selected target", e)
+                        ContextCompat.getMainExecutor(context).execute { onError(e) }
                     } finally {
-                        bitmap.recycle()
+                        image.close()
                     }
-                } catch (e: Exception) {
-                    Log.e("CameraController", "Failed to capture selected target", e)
-                    ContextCompat.getMainExecutor(context).execute { onError(e) }
-                } finally {
-                    image.close()
                 }
-            }
 
-            override fun onError(exception: ImageCaptureException) {
-                ContextCompat.getMainExecutor(context).execute { this@CameraController.onError(exception) }
-            }
-        })
+                override fun onError(exception: ImageCaptureException) {
+                    ContextCompat.getMainExecutor(context).execute { this@CameraController.onError(exception) }
+                }
+            })
+        } catch (e: Exception) {
+            // Includes missing/non-invertible transforms and synchronous takePicture failures.
+            // The owner releases its capture reservation through this same error callback.
+            onError(e)
+        }
     }
 
     private fun snapshot(trackId: Int, source: Bitmap, rect: RectF, kind: TargetImageSource): TargetSnapshot {
         val square = expandedSquareRect(rect, source.width, source.height)
         val bitmap = squareTargetBitmap(source, square)
-        return TargetSnapshot(trackId, bitmap, square, Size(source.width, source.height), kind)
+        val expanded = RectF(square).apply { inset(-width() * .05f, -height() * .05f) }
+        val contextBitmap = squareTargetBitmap(source, expanded)
+        return TargetSnapshot(trackId, bitmap, square, Size(source.width, source.height), kind, contextBitmap)
     }
 
 
@@ -400,20 +456,24 @@ fun CameraPreviewView(
     }
 
     LaunchedEffect(isFrontCamera, previewView, lifecycleOwner, detectorRetryKey) {
+        // CameraX requires the Android main looper even when a Compose test installs its own
+        // continuation interceptor. Explicitly restore Main after background initialization.
+        withContext(Dispatchers.Main.immediate) {
         // MediaPipe loads the model and native runtime here; never perform that work on
         // CameraX's main executor. LaunchedEffect resumes on main before binding/state callbacks.
-        val engine = withContext(Dispatchers.Default) {
-            createDetectorEngine(context) { error ->
+        val engine = createOwnedDetectorEngine {
+            createDetectorEngine(context.applicationContext) { error ->
                 logDetectorFailure(error, temporary = false)
                 ContextCompat.getMainExecutor(context).execute { onDetectorError(error) }
             }
         }
         val provider = try {
             withContext(Dispatchers.IO) { ProcessCameraProvider.getInstance(context).get() }
-        } catch (cancelled: CancellationException) {
+        } catch (failure: Exception) {
             engine.close()
-            throw cancelled
+            throw failure
         }
+        var analyzerOwnsEngine = false
         try {
             cameraProvider = provider
 
@@ -448,9 +508,13 @@ fun CameraPreviewView(
                         engine = engine,
                         onObjectsTracked = { boxes, latency, imageProxy ->
                             firstFrameWatchdog?.onFirstFrame()
-                            val mapped = mapBoxesToPreview(boxes, imageProxy, previewView)
+                            // ImageProxy closes when analyze returns. Copy geometry on its owner
+                            // thread, and read PreviewView only on main (CameraX requires it).
+                            val frame = AnalysisFrameGeometry(imageProxy)
                             ContextCompat.getMainExecutor(context).execute {
-                                onObjectsTracked(mapped, latency)
+                                if (cameraController.currentAnalyzer === analyzer) {
+                                    onObjectsTracked(mapBoxesToPreview(boxes, frame, previewView), latency)
+                                }
                             }
                         },
                         onDetectionError = { error ->
@@ -474,6 +538,7 @@ fun CameraPreviewView(
                         }
                     )
                     cameraController.replaceAnalyzer(imageAnalysis, analyzer)
+                    analyzerOwnsEngine = true
                 } else {
                     cameraController.replaceAnalyzer(imageAnalysis, null)
                 }
@@ -519,8 +584,11 @@ fun CameraPreviewView(
                 cameraController.camera = bindResult.camera
                 cameraController.toggleTorch(isTorchEnabled)
         } catch (e: Exception) {
+            if (!analyzerOwnsEngine) engine.close()
+            if (e is CancellationException) throw e
             Log.e("CameraPreviewView", "Failed to bind camera use cases", e)
             onError(e)
+        }
         }
     }
 
@@ -564,41 +632,37 @@ fun CameraPreviewView(
  *
  * PreviewView uses FILL_CENTER, so scaling normalized analysis coordinates directly to the
  * Compose overlay is incorrect on most phone aspect ratios. CameraX owns the crop, rotation,
- * and mirroring matrices; using the paired output transforms keeps drawing, tapping, and the
+ * and mirroring matrices; mapping through sensor coordinates keeps drawing, tapping, and the
  * camera image in the same coordinate system.
  */
+internal class AnalysisFrameGeometry(image: ImageProxy) {
+    private val rotation = image.imageInfo.rotationDegrees
+    val width = if (rotation % 180 == 0) image.width else image.height
+    val height = if (rotation % 180 == 0) image.height else image.width
+    val uprightToSensor = Matrix().also { inverse ->
+        val sensorToUpright = Matrix(image.imageInfo.sensorToBufferTransformMatrix)
+        sensorToUpright.postConcat(uprightTransform(image.width, image.height, rotation))
+        check(sensorToUpright.invert(inverse)) { "Analysis transformation cannot be inverted" }
+    }
+}
+
 internal fun mapBoxesToPreview(
     boxes: List<TrackedBoundingBox>,
-    imageProxy: ImageProxy,
+    frame: AnalysisFrameGeometry,
     previewView: PreviewView
 ): List<TrackedBoundingBox> {
-    val previewTransform = previewView.outputTransform ?: return boxes
+    val sensorToView = previewView.sensorToViewTransform ?: return emptyList()
     if (previewView.width <= 0 || previewView.height <= 0) return boxes
-
-    val imageTransform = ImageProxyTransformFactory().apply {
-        isUsingCropRect = true
-        isUsingRotationDegrees = true
-    }.getOutputTransform(imageProxy)
-    val coordinateTransform = CoordinateTransform(imageTransform, previewTransform)
-    val imageWidth = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) {
-        imageProxy.width.toFloat()
-    } else {
-        imageProxy.height.toFloat()
-    }
-    val imageHeight = if (imageProxy.imageInfo.rotationDegrees % 180 == 0) {
-        imageProxy.height.toFloat()
-    } else {
-        imageProxy.width.toFloat()
-    }
+    val transform = Matrix(frame.uprightToSensor).apply { postConcat(sensorToView) }
 
     return boxes.map { box ->
         val sourceRect = RectF(
-            box.normalizedRect.left * imageWidth,
-            box.normalizedRect.top * imageHeight,
-            box.normalizedRect.right * imageWidth,
-            box.normalizedRect.bottom * imageHeight
+            box.normalizedRect.left * frame.width,
+            box.normalizedRect.top * frame.height,
+            box.normalizedRect.right * frame.width,
+            box.normalizedRect.bottom * frame.height
         )
-        coordinateTransform.mapRect(sourceRect)
+        transform.mapRect(sourceRect)
         box.copy(
             normalizedRect = normalizePreviewRect(sourceRect, previewView.width, previewView.height)
         )

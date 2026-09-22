@@ -26,6 +26,9 @@ class SpeciesRepositoryTest {
         try {
             assertEquals(uncertain, repository.identifyImage(bitmap))
             assertEquals(0, repository.discoveredSpeciesFlow.first().size)
+            response = com.example.data.model.RecognitionResult.CommonPlant("banana", "Chuối", "Banana", .9f)
+            repository.identifyPair(bitmap, bitmap)
+            assertEquals(0, repository.discoveredSpeciesFlow.first().size)
             val species = SpeciesCatalog.fromScientificName("Example plant", .9f)
             response = com.example.data.model.RecognitionResult.Organism(species)
             repository.identifyImage(bitmap)

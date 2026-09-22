@@ -1,0 +1,8 @@
+{
+  "source": "https://storage.googleapis.com/mediapipe-models/image_classifier/efficientnet_lite0/float32/1/efficientnet_lite0.tflite",
+  "sha256": "6c7ab0a6e5dcbf38a8c33b960996a55a3b4300b36a018c4545801de3a3c8bde0",
+  "bytes": 18582189,
+  "model": "EfficientNet-Lite0 ImageNet",
+  "minimumScore": 0.75,
+  "minimumMargin": 0.2
+}

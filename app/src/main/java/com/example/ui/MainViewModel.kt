@@ -40,12 +40,10 @@ import com.example.ui.camera.RecoverableDetectorInitializationException
 data class ScanRequest(
     val trackId: Int,
     val croppedBitmap: Bitmap,
-    val snapshotRect: RectF = RectF(0f, 0f, 1f, 1f)
+    val snapshotRect: RectF = RectF(0f, 0f, 1f, 1f),
+    val expandedBitmap: Bitmap? = null
 )
 
-private const val TARGET_LOCK_MISSED_FRAME_TIMEOUT = 3
-private const val TARGET_LOCK_MIN_IOU = 0.20f
-private const val TARGET_LOCK_MAX_CENTER_DISTANCE = 0.12f
 internal const val MANUAL_TARGET_TRACK_ID = Int.MIN_VALUE + 1
 
 private data class DetectorErrorClassification(
@@ -60,6 +58,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     internal var identifyImage: suspend (Bitmap, (ScanTransportPhase) -> Unit) -> RecognitionResult = repository::identifyImage
 
     // Current detected species showing on the live camera viewfinder
+    internal var identifyPair: suspend (Bitmap, Bitmap, (ScanTransportPhase) -> Unit) -> RecognitionResult = repository::identifyPair
+
     private val _detectedSpecies = MutableStateFlow<SpeciesInfo?>(null)
     val detectedSpecies: StateFlow<SpeciesInfo?> = _detectedSpecies.asStateFlow()
 
@@ -77,8 +77,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ID của Track đang được người dùng chọn/khóa (mặc định null: chưa có box nào được chọn)
     private val _selectedTrackId = MutableStateFlow<Int?>(null)
     val selectedTrackId: StateFlow<Int?> = _selectedTrackId.asStateFlow()
-    private var lockedTargetRect: RectF? = null
-    private var missedLockedTargetFrames = 0
     private var manualTargetBox: TrackedBoundingBox? = null
 
     // Đo kiểm hiệu năng AI Telemetry
@@ -102,6 +100,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val scanThumbnail: StateFlow<Bitmap?> = _scanThumbnail.asStateFlow()
     private val runningTrackIds = mutableSetOf<Int>()
     private val captureReservations = mutableSetOf<Int>()
+    private var selectionVersion = 0L
+    private val captureVersions = mutableMapOf<Int, Long>()
 
     private val _targetSelectionRequired = MutableStateFlow(false)
     val targetSelectionRequired: StateFlow<Boolean> = _targetSelectionRequired.asStateFlow()
@@ -151,44 +151,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             addAll(boxes.filterNot { it.id == MANUAL_TARGET_TRACK_ID })
         }
         val currentSelectedId = _selectedTrackId.value
-
-        if (effectiveBoxes.isNotEmpty()) {
-            val matchedTarget = when {
-                currentSelectedId == null -> null
-                else -> effectiveBoxes.firstOrNull { it.id == currentSelectedId }
-                    ?: lockedTargetRect?.let { previousRect -> findLockedTarget(previousRect, effectiveBoxes) }
-            }
-            val validSelectedId = when {
-                currentSelectedId == null -> null
-                matchedTarget != null -> matchedTarget.id
-                ++missedLockedTargetFrames > TARGET_LOCK_MISSED_FRAME_TIMEOUT -> null
-                else -> currentSelectedId
-            }
-            if (matchedTarget != null) {
-                lockedTargetRect = RectF(matchedTarget.normalizedRect)
-                missedLockedTargetFrames = 0
-            } else if (validSelectedId == null) {
-                lockedTargetRect = null
-                missedLockedTargetFrames = 0
-            }
-            _selectedTrackId.value = validSelectedId
-            val updated = effectiveBoxes.map { box ->
-                box.copy(
-                    isSelected = (box.id == validSelectedId),
-                    identifiedSpecies = _boxSpeciesMap.value[box.id]
-                )
-            }
-            _trackedObjects.value = updated
-            _detectedSpecies.value = validSelectedId?.let { _boxSpeciesMap.value[it] }
-        } else {
-            _trackedObjects.value = emptyList()
+        val selected = effectiveBoxes.firstOrNull { it.id == currentSelectedId }
+            ?: effectiveBoxes.filter { it.isObserved }.minWithOrNull(
+                compareBy<TrackedBoundingBox> {
+                    val dx = it.normalizedRect.centerX() - .5f
+                    val dy = it.normalizedRect.centerY() - .5f
+                    dx * dx + dy * dy
+                }.thenByDescending { it.confidence }.thenBy { it.id })
+        val nextId = selected?.id
+        if (nextId != currentSelectedId) {
+            selectionVersion++
             _detectedSpecies.value = null
-            if (currentSelectedId == null || ++missedLockedTargetFrames > TARGET_LOCK_MISSED_FRAME_TIMEOUT) {
-                _selectedTrackId.value = null
-                lockedTargetRect = null
-                missedLockedTargetFrames = 0
-            }
+            _notOrganism.value = null
+            if (_scanState.value is ScanState.Completed) _scanState.value = ScanState.Idle
         }
+        _selectedTrackId.value = nextId
+        _trackedObjects.value = effectiveBoxes.map { box ->
+            box.copy(isSelected = box.id == nextId, identifiedSpecies = _boxSpeciesMap.value[box.id])
+        }
+        _detectedSpecies.value = nextId?.let { _boxSpeciesMap.value[it] }
+        // Do not accumulate results for expired IDs or transfer them to a neighbouring target.
+        _boxSpeciesMap.value = _boxSpeciesMap.value.filterKeys { id -> effectiveBoxes.any { it.id == id } }
     }
 
     fun onDetectorError(error: Throwable) {
@@ -202,8 +185,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _detectorState.value = DetectorState.Error(error, type, stage)
         _trackedObjects.value = emptyList()
         _selectedTrackId.value = null
-        lockedTargetRect = null
-        missedLockedTargetFrames = 0
     }
 
     private fun classifyDetectorError(error: Throwable): DetectorErrorClassification {
@@ -235,14 +216,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * hoặc sẵn sàng quét mới nếu box đó chưa từng được quét.
      */
     fun selectTrack(trackId: Int?) {
+        selectionVersion++
         _notOrganism.value = null
         if (_scanState.value is ScanState.Completed) _scanState.value = ScanState.Idle
-        val validTrackId = trackId?.takeIf { id -> _trackedObjects.value.any { it.id == id } }
+        val validTrackId = trackId?.takeIf { id -> _trackedObjects.value.any { it.id == id && it.isObserved } }
+        if (validTrackId != MANUAL_TARGET_TRACK_ID) manualTargetBox = null
         _selectedTrackId.value = validTrackId
-        lockedTargetRect = validTrackId
-            ?.let { id -> _trackedObjects.value.firstOrNull { it.id == id } }
-            ?.let { RectF(it.normalizedRect) }
-        missedLockedTargetFrames = 0
         _trackedObjects.value = _trackedObjects.value.map { box ->
             box.copy(
                 isSelected = (validTrackId != null && box.id == validTrackId),
@@ -250,7 +229,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         // Hiển thị kết quả của box này nếu đã từng phân tích, ngược lại trả về null để sẵn sàng quét
-        _detectedSpecies.value = validTrackId?.let { _boxSpeciesMap.value[it] }
+        _detectedSpecies.value = null
+        validTrackId?.let { clearSpeciesForTarget(it) }
     }
 
     /**
@@ -268,7 +248,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Chuyển đổi nhanh sang Bounding Box tiếp theo trong danh sách
      */
     fun selectNextTrack() {
-        val list = _trackedObjects.value
+        val list = _trackedObjects.value.filter { it.isObserved }
         if (list.isEmpty()) return
         val currentIndex = list.indexOfFirst { it.id == _selectedTrackId.value }
         val nextIndex = if (currentIndex >= 0 && currentIndex < list.size - 1) currentIndex + 1 else 0
@@ -280,6 +260,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * một Bounding Box mục tiêu mới ngay tại tọa độ đó và chọn nó để quét!
      */
     fun createOrMoveTargetBox(normCenterX: Float, normCenterY: Float) {
+        _trackedObjects.value.filter { it.isObserved && it.id != MANUAL_TARGET_TRACK_ID &&
+            it.normalizedRect.contains(normCenterX, normCenterY) }
+            .minByOrNull { it.normalizedRect.width() * it.normalizedRect.height() }?.let {
+                selectTrack(it.id)
+                return
+            }
         _notOrganism.value = null
         if (_scanState.value is ScanState.Completed) _scanState.value = ScanState.Idle
         val halfW = 0.20f
@@ -296,6 +282,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             isSelected = true
         )
 
+        selectionVersion++
         manualTargetBox = customBox
         _boxSpeciesMap.value = _boxSpeciesMap.value - MANUAL_TARGET_TRACK_ID
         val updatedList = _trackedObjects.value.filter { it.id != MANUAL_TARGET_TRACK_ID }.toMutableList().apply {
@@ -303,36 +290,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         _trackedObjects.value = updatedList
         _selectedTrackId.value = MANUAL_TARGET_TRACK_ID
-        lockedTargetRect = RectF(newRect)
-        missedLockedTargetFrames = 0
         _detectedSpecies.value = null // Sẵn sàng để quét mục tiêu vừa chọn
-    }
-
-    private fun findLockedTarget(
-        previousRect: RectF,
-        boxes: List<TrackedBoundingBox>
-    ): TrackedBoundingBox? {
-        return boxes.map { box ->
-            val iou = intersectionOverUnion(previousRect, box.normalizedRect)
-            val dx = previousRect.centerX() - box.normalizedRect.centerX()
-            val dy = previousRect.centerY() - box.normalizedRect.centerY()
-            Triple(box, iou, sqrt(dx * dx + dy * dy))
-        }.filter { (_, iou, distance) ->
-            iou >= TARGET_LOCK_MIN_IOU || distance <= TARGET_LOCK_MAX_CENTER_DISTANCE
-        }.sortedWith(
-            compareByDescending<Triple<TrackedBoundingBox, Float, Float>> { it.second }
-                .thenBy { it.third }
-        ).firstOrNull()?.first
-    }
-
-    private fun intersectionOverUnion(first: RectF, second: RectF): Float {
-        val intersectionWidth = (minOf(first.right, second.right) - maxOf(first.left, second.left))
-            .coerceAtLeast(0f)
-        val intersectionHeight = (minOf(first.bottom, second.bottom) - maxOf(first.top, second.top))
-            .coerceAtLeast(0f)
-        val intersection = intersectionWidth * intersectionHeight
-        val union = first.width() * first.height() + second.width() * second.height() - intersection
-        return if (union > 0f) intersection / union else 0f
     }
 
     /**
@@ -361,11 +319,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun beginCapture(trackId: Int, snapshotRect: RectF): Boolean {
+        if (_trackedObjects.value.any { it.id == trackId && !it.isObserved }) return false
         if (runningTrackIds.isNotEmpty()) return false
         clearSpeciesForTarget(trackId)
         _notOrganism.value = null
         runningTrackIds += trackId
         captureReservations += trackId
+        captureVersions[trackId] = selectionVersion
         _scanState.value = ScanState.CapturingFrame(trackId, RectF(snapshotRect))
         return true
     }
@@ -378,12 +338,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Đóng thẻ thông tin loài hiện tại để quan sát khung hình tự do
      */
     fun dismissSpeciesTag() {
+        clearSpeciesForTarget(_selectedTrackId.value)
         _detectedSpecies.value = null
+        if (_scanState.value is ScanState.Completed) _scanState.value = ScanState.Idle
     }
 
     fun analyzeImage(request: ScanRequest) {
         val targetId = request.trackId
         if (!captureReservations.remove(targetId) && !runningTrackIds.add(targetId)) return
+        val versionAtStart = captureVersions.remove(targetId) ?: selectionVersion
         val snapshotRect = RectF(request.snapshotRect)
         viewModelScope.launch {
             _isAnalyzing.value = true
@@ -394,13 +357,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _detectedSpecies.value = null // Xóa kết quả cũ ngay lập tức để hiển thị HUD quét laser
             try {
                 // The bitmap and ID are one immutable click-time request; do not re-read tracking.
-                val result = identifyImage(
-                    request.croppedBitmap
-                ) { phase ->
+                val phaseCallback: (ScanTransportPhase) -> Unit = { phase ->
                     _scanState.value = when (phase) {
                         ScanTransportPhase.PREPARING -> ScanState.PreparingImage(targetId, snapshotRect)
                         ScanTransportPhase.CLASSIFYING -> ScanState.Classifying(targetId, snapshotRect)
                     }
+                }
+                val result = request.expandedBitmap?.let {
+                    identifyPair(request.croppedBitmap, it, phaseCallback)
+                } ?: identifyImage(request.croppedBitmap, phaseCallback)
+                // A late result belongs to its capture, not a newly selected target.
+                if (selectionVersion != versionAtStart) {
+                    _scanState.value = ScanState.Idle
+                    return@launch
                 }
                 when (result) {
                     is RecognitionResult.Organism -> {
@@ -412,6 +381,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     }
+                    is RecognitionResult.CommonPlant -> clearSpeciesForTarget(targetId)
                     is RecognitionResult.Uncertain -> clearSpeciesForTarget(targetId)
                     is RecognitionResult.NotOrganism -> {
                         _notOrganism.value = result
@@ -440,6 +410,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _isAnalyzing.value = false
                 // Completed/failed UI does not render the crop; release its strong bitmap reference.
                 _scanThumbnail.value = null
+                request.expandedBitmap?.let { if (it !== request.croppedBitmap) it.recycle() }
                 runningTrackIds.remove(targetId)
             }
         }

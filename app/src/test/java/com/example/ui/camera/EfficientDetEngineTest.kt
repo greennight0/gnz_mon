@@ -67,9 +67,10 @@ class EfficientDetEngineTest {
         val detection = DetectorOutput(RectF(.1f, .2f, .4f, .6f), .9f)
 
         tracker.update(listOf(detection), threshold = .35f)
+        tracker.update(listOf(detection), threshold = .35f)
         val matched = tracker.update(listOf(detection), threshold = .35f).single()
 
-        assertEquals(2, matched.trackingFrames)
+        assertEquals(3, matched.trackingFrames)
         assertEquals(false, matched.isSelected)
     }
 

@@ -118,16 +118,16 @@ class TrackSelectorTest {
 
         composeRule.onNodeWithTag("track_selector_bar").assertDoesNotExist()
         composeRule.onNodeWithTag("capture_button").assertDoesNotExist()
-        composeRule.onNodeWithTag("box_header_tag_42")
-            .assertContentDescriptionEquals("Mục tiêu Nature Specimen (Mẫu vật)")
-            .performClick()
-            .assertIsSelected()
+        composeRule.onNodeWithTag("box_header_tag_42").assertDoesNotExist()
+        composeRule.onNodeWithTag("bounding_box_canvas")
+            .performTouchInput { click(Offset(width * .4f, height * .4f)) }
+        composeRule.onNodeWithTag("box_header_tag_42").assertIsSelected()
         composeRule.onNodeWithTag("capture_button").assertExists()
         assertEquals(42, lastSelectedId)
 
         composeRule.onNodeWithTag("box_header_tag_42")
             .performClick()
-            .assertIsNotSelected()
+            .assertDoesNotExist()
         composeRule.onNodeWithTag("capture_button").assertDoesNotExist()
         assertEquals(null, lastSelectedId)
     }
@@ -138,16 +138,16 @@ class TrackSelectorTest {
         setOverlayContent { lastSelectedId = it }
 
         composeRule.onNodeWithTag("capture_button").assertDoesNotExist()
-        composeRule.onNodeWithTag("bounding_box_target_42")
-            .assertContentDescriptionEquals("Mục tiêu Nature Specimen (Mẫu vật)")
-            .performClick()
-            .assertIsSelected()
+        composeRule.onNodeWithTag("bounding_box_target_42").assertDoesNotExist()
+        composeRule.onNodeWithTag("bounding_box_canvas")
+            .performTouchInput { click(Offset(width * .4f, height * .4f)) }
+        composeRule.onNodeWithTag("bounding_box_target_42").assertIsSelected()
         composeRule.onNodeWithTag("capture_button").assertExists()
         assertEquals(42, lastSelectedId)
 
         composeRule.onNodeWithTag("bounding_box_target_42")
             .performClick()
-            .assertIsNotSelected()
+            .assertDoesNotExist()
         composeRule.onNodeWithTag("capture_button").assertDoesNotExist()
         assertEquals(null, lastSelectedId)
     }
@@ -212,9 +212,8 @@ class TrackSelectorTest {
         val selections = mutableListOf<Int?>()
         setOverlayContent { selections += it }
 
-        composeRule.onNodeWithTag("bounding_box_target_42")
-            .performClick()
-            .assertIsSelected()
+        composeRule.onNodeWithTag("bounding_box_canvas").performTouchInput { click(Offset(width * .4f, height * .4f)) }
+        composeRule.onNodeWithTag("bounding_box_target_42").assertIsSelected()
         composeRule.onNodeWithTag("capture_button").assertExists()
 
         composeRule.onNodeWithTag("bounding_box_canvas")
@@ -423,7 +422,7 @@ class TrackSelectorTest {
         viewModel.onObjectsTracked(listOf(target), 16)
         viewModel.selectTrack(10)
 
-        repeat(3) { viewModel.onObjectsTracked(emptyList(), 16) }
+        repeat(3) { viewModel.onObjectsTracked(listOf(target.copy(isObserved = false)), 16) }
         assertEquals(10, viewModel.selectedTrackId.value)
 
         viewModel.onObjectsTracked(listOf(target.copy(normalizedRect = RectF(0.22f, 0.25f, 0.62f, 0.55f))), 16)
@@ -437,10 +436,10 @@ class TrackSelectorTest {
         val target = trackedBox.copy(id = 10)
         viewModel.onObjectsTracked(listOf(target), 16)
         viewModel.selectTrack(10)
-        repeat(3) { viewModel.onObjectsTracked(emptyList(), 16) }
+        repeat(3) { viewModel.onObjectsTracked(listOf(target.copy(isObserved = false)), 16) }
         assertEquals(10, viewModel.selectedTrackId.value)
         viewModel.onObjectsTracked(listOf(target), 16)
-        repeat(3) { viewModel.onObjectsTracked(emptyList(), 16) }
+        repeat(3) { viewModel.onObjectsTracked(listOf(target.copy(isObserved = false)), 16) }
         assertEquals(10, viewModel.selectedTrackId.value)
         viewModel.onObjectsTracked(emptyList(), 16)
         assertEquals(null, viewModel.selectedTrackId.value)

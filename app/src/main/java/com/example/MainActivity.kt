@@ -194,7 +194,7 @@ fun MysteriesOfNatureApp(
         // Copy both values synchronously. Tracking may publish another list during capture.
         val clickTrackId = selectedTrackId
         val clickRect = clickTrackId?.let { id ->
-            trackedObjects.firstOrNull { it.id == id }?.normalizedRect?.let { RectF(it) }
+            trackedObjects.firstOrNull { it.id == id && it.isObserved }?.normalizedRect?.let { RectF(it) }
         }
         if (clickTrackId == null || clickRect == null) {
             viewModel.requireTargetSelection()
@@ -214,7 +214,7 @@ fun MysteriesOfNatureApp(
             clickRect.right * view.width, clickRect.bottom * view.height
         )
         controller.captureTarget(TargetCaptureRequest(clickTrackId, previewRect)) { snapshot ->
-            viewModel.analyzeImage(ScanRequest(snapshot.trackId, snapshot.bitmap, clickRect))
+            viewModel.analyzeImage(ScanRequest(snapshot.trackId, snapshot.bitmap, clickRect, snapshot.expandedBitmap))
         }
     }
 
