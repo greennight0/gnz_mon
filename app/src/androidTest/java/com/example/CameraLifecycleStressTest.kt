@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.pm.PackageManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
@@ -17,9 +18,12 @@ import org.junit.runner.RunWith
 class CameraLifecycleStressTest {
     @Before fun grantCamera() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        instrumentation.uiAutomation.grantRuntimePermission(
-            instrumentation.targetContext.packageName, Manifest.permission.CAMERA
-        )
+        // Some OEMs deny shell permission grants even when the user already granted access.
+        if (instrumentation.targetContext.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            instrumentation.uiAutomation.grantRuntimePermission(
+                instrumentation.targetContext.packageName, Manifest.permission.CAMERA
+            )
+        }
     }
 
     @Test fun repeatedOpenFlipBackgroundForegroundAndRecreateDoesNotLeakExecutor() {

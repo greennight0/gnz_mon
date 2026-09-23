@@ -2,9 +2,8 @@ package com.example.data.repository
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
-import com.example.data.api.GeminiVisionClient
+import com.example.data.classifier.CommonPlantClassifier
+import com.example.data.classifier.SpeciesClassifier
 import com.example.data.local.AppDatabase
 import com.example.data.local.SpeciesDao
 import com.example.data.model.SocialLink
@@ -13,16 +12,15 @@ import com.example.data.model.SpeciesInfo
 import com.example.data.model.ScanTransportPhase
 import kotlinx.coroutines.flow.Flow
 
-class SpeciesRepository(context: Context) {
+class SpeciesRepository(
+    context: Context,
+    classifierFactory: (Context) -> SpeciesClassifier = { CommonPlantClassifier.create(it) }
+) {
 
     private val speciesDao: SpeciesDao = AppDatabase.getDatabase(context).speciesDao()
-    private val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
-    private val geminiVisionClient = GeminiVisionClient(isNetworkAvailable = {
-        connectivityManager?.activeNetwork?.let { network ->
-            connectivityManager.getNetworkCapabilities(network)
-                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-        } == true
-    })
+    private val speciesClassifier by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        classifierFactory(context.applicationContext)
+    }
 
     val discoveredSpeciesFlow: Flow<List<SpeciesInfo>> = speciesDao.getAllDiscovered()
 
@@ -46,10 +44,17 @@ class SpeciesRepository(context: Context) {
         bitmap: Bitmap,
         onPhase: (ScanTransportPhase) -> Unit = {}
     ): RecognitionResult {
-        val result = geminiVisionClient.identifyFloraOrFauna(bitmap, onPhase)
+        val result = speciesClassifier.classify(bitmap, onPhase)
         if (result is RecognitionResult.Organism) {
             saveSpeciesToJournal(result.species)
         }
+        return result
+    }
+
+    suspend fun identifyPair(bitmap: Bitmap, expanded: Bitmap,
+        onPhase: (ScanTransportPhase) -> Unit = {}): RecognitionResult {
+        val result = speciesClassifier.classifyPair(bitmap, expanded, onPhase)
+        if (result is RecognitionResult.Organism) saveSpeciesToJournal(result.species)
         return result
     }
 

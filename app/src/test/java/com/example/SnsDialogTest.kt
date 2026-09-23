@@ -1,13 +1,13 @@
 package com.example
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.fetchSemanticsNode
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import com.example.data.model.AppLanguage
 import com.example.data.model.SocialLink
@@ -41,10 +41,12 @@ class SnsDialogTest {
     fun narrowScreenAndLargeFont_cardsRemainReadableAndScrollable() {
         setDialog(AppLanguage.ENGLISH, fontScale = 2f)
 
-        composeTestRule.onNodeWithTag("sns_item_x_twitter")
-            .assertContentDescriptionContains("GNZ MON Wildlife Research Community")
-            .assertContentDescriptionContains("Open")
+        val item = composeTestRule.onNodeWithTag("sns_item_x_twitter")
             .assertIsDisplayed()
+            .fetchSemanticsNode()
+        val descriptions = item.config[SemanticsProperties.ContentDescription]
+        assertTrue(descriptions.any { it.contains("GNZ MON Wildlife Research Community") })
+        assertTrue(descriptions.any { it.contains("Open") })
 
         val nameBounds = composeTestRule.onNodeWithTag("sns_name_x_twitter", useUnmergedTree = true)
             .fetchSemanticsNode().boundsInRoot
@@ -55,8 +57,9 @@ class SnsDialogTest {
         assertTrue("Handle must be below the channel name", handleBounds.top >= nameBounds.bottom)
         assertTrue("Category must not overlap the handle", categoryBounds.top >= handleBounds.bottom)
 
+        composeTestRule.onNodeWithTag("sns_links_list")
+            .performScrollToNode(hasTestTag("sns_item_linkedin"))
         composeTestRule.onNodeWithTag("sns_item_linkedin")
-            .performScrollTo()
             .assertIsDisplayed()
     }
 

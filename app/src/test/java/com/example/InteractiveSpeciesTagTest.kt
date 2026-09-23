@@ -5,8 +5,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertContentDescriptionEquals
-import androidx.compose.ui.test.assertDoesNotExist
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -52,10 +50,11 @@ class InteractiveSpeciesTagTest {
 
     @Test
     fun dismissButton_hasLocalizedDescriptionAndMinimumTouchTarget() {
+        var language by mutableStateOf(AppLanguage.VIETNAMESE)
         composeRule.setContent {
             InteractiveSpeciesTag(
                 species = species,
-                language = AppLanguage.VIETNAMESE,
+                language = language,
                 onInfoClick = {}
             )
         }
@@ -66,13 +65,7 @@ class InteractiveSpeciesTagTest {
             .assertWidthIsAtLeast(48.dp)
             .assertHeightIsAtLeast(48.dp)
 
-        composeRule.setContent {
-            InteractiveSpeciesTag(
-                species = species,
-                language = AppLanguage.ENGLISH,
-                onInfoClick = {}
-            )
-        }
+        composeRule.runOnIdle { language = AppLanguage.ENGLISH }
 
         composeRule.onNodeWithTag("dismiss_species_button")
             .assertContentDescriptionEquals("Close scan result")

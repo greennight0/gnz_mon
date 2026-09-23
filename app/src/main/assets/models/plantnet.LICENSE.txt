@@ -1,0 +1,14 @@
+PlantNet-300K model bundle
+
+Converted LiteRT model and upstream weights: Apache License 2.0.
+Source: https://huggingface.co/litert-community/PlantNet-300K-ResNet18-LiteRT
+Upstream weights: https://huggingface.co/cpoisson/plantnet300k-resnet18
+
+PlantNet-300K source code and benchmark: BSD 2-Clause License.
+Copyright (c) 2021, Pl@ntNet. All rights reserved.
+Source: https://github.com/plantnet/PlantNet-300K
+
+Redistribution and use in source and binary forms, with or without modification, are permitted
+provided that the copyright notice, conditions, and disclaimer are retained. The software and
+model are provided "AS IS", without warranty. Full license texts and source links must accompany
+redistributions of this application.

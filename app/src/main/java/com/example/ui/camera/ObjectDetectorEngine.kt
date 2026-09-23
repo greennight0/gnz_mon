@@ -16,6 +16,7 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetectorResult
 import java.io.Closeable
+import java.nio.ByteBuffer
 import kotlin.math.max
 import kotlin.math.min
 
@@ -51,25 +52,31 @@ class EfficientDetLiteEngine private constructor(
     private val scoreThreshold: Float
 ) : ObjectDetectorEngine {
     private val tracker = GeometryTracker()
-    private var rotatedBuffer: Bitmap? = null
+    private var closed = false
 
     @Synchronized
     override fun detect(image: ImageProxy): List<TrackedBoundingBox> {
+        check(!closed) { "Detector has already been closed" }
         val rotation = image.imageInfo.rotationDegrees
         val source = runDetectorStage(DetectorStage.IMAGE_TO_BITMAP) { image.toBitmap() }
         var detectorBitmap = source
         try {
             if (rotation != 0) {
-                detectorBitmap = obtainRotatedBuffer(source, rotation)
+                val swapDimensions = rotation % 180 != 0
+                detectorBitmap = Bitmap.createBitmap(
+                    if (swapDimensions) source.height else source.width,
+                    if (swapDimensions) source.width else source.height,
+                    Bitmap.Config.ARGB_8888
+                )
                 drawRotated(source, detectorBitmap, rotation)
             }
-            // BitmapImageBuilder does not own detectorBitmap. Both the MediaPipe image and any
-            // per-frame source bitmap remain valid until synchronous detect() has returned.
+            // MPImage.close() recycles the supplied bitmap. Never retain it as a reusable buffer,
+            // and read its dimensions while the image is still open.
             val mpImage = runDetectorStage(DetectorStage.MP_IMAGE_CREATION) {
                 BitmapImageBuilder(detectorBitmap).build()
             }
-            val result = mpImage.use {
-                try {
+            return mpImage.use {
+                val result = try {
                     runDetectorStage(DetectorStage.DETECTOR_DETECT) { detector.detect(mpImage) }
                 } catch (error: DetectorStageException) {
                     if (error.hasPermanentRuntimeCause()) {
@@ -81,26 +88,15 @@ class EfficientDetLiteEngine private constructor(
                     }
                     throw error
                 }
+                tracker.update(
+                    result, detectorBitmap.width.toFloat(), detectorBitmap.height.toFloat(), scoreThreshold
+                )
             }
-            return tracker.update(
-                result, detectorBitmap.width.toFloat(), detectorBitmap.height.toFloat(), scoreThreshold
-            )
         } finally {
-            // ImageProxy.toBitmap() transfers a new bitmap to this method. The rotated buffer is
-            // engine-owned and reused; only the per-frame source is released here.
-            source.recycle()
+            // Also cover conversion/build failures before ownership transfers to MPImage.
+            if (!detectorBitmap.isRecycled) detectorBitmap.recycle()
+            if (!source.isRecycled) source.recycle()
         }
-    }
-
-    private fun obtainRotatedBuffer(source: Bitmap, rotation: Int): Bitmap {
-        val swapDimensions = rotation % 180 != 0
-        val width = if (swapDimensions) source.height else source.width
-        val height = if (swapDimensions) source.width else source.height
-        return rotatedBuffer?.takeIf { !it.isRecycled && it.width == width && it.height == height }
-            ?: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { replacement ->
-                rotatedBuffer?.recycle()
-                rotatedBuffer = replacement
-            }
     }
 
     private fun drawRotated(source: Bitmap, destination: Bitmap, rotation: Int) {
@@ -120,8 +116,8 @@ class EfficientDetLiteEngine private constructor(
 
     @Synchronized
     override fun close() {
-        rotatedBuffer?.recycle()
-        rotatedBuffer = null
+        if (closed) return
+        closed = true
         detector.close()
     }
 
@@ -130,53 +126,80 @@ class EfficientDetLiteEngine private constructor(
         const val CALIBRATED_SCORE_THRESHOLD = 0.22f
         val MODEL_ASSET: String = BuildConfig.DETECTOR_MODEL_ASSET
         fun create(context: Context, scoreThreshold: Float = CALIBRATED_SCORE_THRESHOLD): EfficientDetLiteEngine {
-            // Opening first gives a deterministic, controlled error for absent/corrupt packaging.
-            context.assets.open(MODEL_ASSET).use { require(it.read() >= 0) }
+            // Give each graph its own model content rather than an asset-backed native mapping.
+            // TaskOptions copies this buffer into the graph's model resources.
+            val modelBytes = context.applicationContext.assets.open(MODEL_ASSET).use { it.readBytes() }
+            require(modelBytes.isNotEmpty())
+            val modelBuffer = ByteBuffer.allocateDirect(modelBytes.size).apply {
+                put(modelBytes)
+                rewind()
+            }
             val options = ObjectDetector.ObjectDetectorOptions.builder()
-                .setBaseOptions(BaseOptions.builder().setModelAssetPath(MODEL_ASSET).build())
+                .setBaseOptions(BaseOptions.builder().setModelAssetBuffer(modelBuffer).build())
                 .setScoreThreshold(scoreThreshold)
                 .setMaxResults(5)
                 .build()
-            return EfficientDetLiteEngine(ObjectDetector.createFromOptions(context, options), scoreThreshold)
+            // Native graphs may outlive an Activity while a camera rebind is cancelled.
+            // Keep their asset manager attached to the application lifetime.
+            return EfficientDetLiteEngine(ObjectDetector.createFromOptions(context.applicationContext, options), scoreThreshold)
         }
     }
 }
 
-internal class GeometryTracker {
-    private data class Track(val id: Int, var box: RectF, var frames: Int, var seen: Long)
+internal class GeometryTracker(private val clock: () -> Long = android.os.SystemClock::elapsedRealtime) {
+    private data class Track(val id: Int, var box: RectF, var measured: RectF,
+        var frames: Int, var streak: Int, var confirmed: Boolean, var seen: Long,
+        var score: Float)
     private val tracks = mutableListOf<Track>()
     private var nextId = 200
 
-    fun update(result: ObjectDetectorResult, width: Float, height: Float, threshold: Float): List<TrackedBoundingBox> {
-        val detections = result.detections().map { detection ->
+    fun update(result: ObjectDetectorResult, width: Float, height: Float, threshold: Float): List<TrackedBoundingBox> =
+        update(result.detections().map { detection ->
             val b = detection.boundingBox()
-            DetectorOutput(
-                box = RectF(b.left / width, b.top / height, b.right / width, b.bottom / height),
-                score = detection.categories().firstOrNull()?.score() ?: 0f
-            )
-        }
-        return update(detections, threshold)
-    }
+            DetectorOutput(RectF(b.left / width, b.top / height, b.right / width, b.bottom / height),
+                detection.categories().firstOrNull()?.score() ?: 0f)
+        }, threshold)
 
     internal fun update(detections: List<DetectorOutput>, threshold: Float): List<TrackedBoundingBox> {
-        val now = System.currentTimeMillis()
-        tracks.removeAll { now - it.seen > 1500 }
+        val now = clock()
+        tracks.removeAll { now - it.seen > 500 }
+        val kept = mutableListOf<DetectorOutput>()
+        detections.filter { d -> d.score.isFinite() && d.score in threshold..1f &&
+            listOf(d.box.left, d.box.top, d.box.right, d.box.bottom).all { it.isFinite() } && !d.box.isEmpty
+        }.mapNotNull { d ->
+            val r = RectF(d.box.left.coerceIn(0f, 1f), d.box.top.coerceIn(0f, 1f),
+                d.box.right.coerceIn(0f, 1f), d.box.bottom.coerceIn(0f, 1f))
+            if (r.isEmpty) null else d.copy(box = r)
+        }.sortedWith(compareByDescending<DetectorOutput> { it.score }.thenBy { it.box.left }.thenBy { it.box.top })
+            .forEach { d -> if (kept.none { iou(it.box, d.box) >= .5f }) kept += d }
         val used = mutableSetOf<Int>()
-        return detections.mapNotNull { detection ->
-            val score = detection.score
-            if (score < threshold) return@mapNotNull null
-            val measured = detection.box
-            val track = tracks.filter { it.id !in used }.maxByOrNull { iou(it.box, measured) }
-                ?.takeIf { iou(it.box, measured) >= .25f }
-                ?: Track(nextId++, measured, 0, now).also(tracks::add)
-            track.box = measured; track.frames++; track.seen = now; used += track.id
-            TrackedBoundingBox(
-                id = track.id,
-                normalizedRect = RectF(measured),
-                label = "Detected object",
-                confidence = score,
-                trackingFrames = track.frames
-            )
+        val assigned = mutableSetOf<Int>()
+        // Globally strongest overlap first, never assign either endpoint twice.
+        val pairs = tracks.flatMap { t -> kept.mapIndexed { i, d -> Triple(t, i, iou(t.measured, d.box)) } }
+            .filter { it.third >= .25f }
+            .sortedWith(compareByDescending<Triple<Track, Int, Float>> { it.third }
+                .thenBy { it.first.id }.thenBy { it.second })
+        for ((t, index, _) in pairs) {
+            if (t.id in used || index in assigned) continue
+            used += t.id; assigned += index
+            val d = kept[index]
+            val alpha = (1.0 - kotlin.math.exp(-(now - t.seen).coerceAtLeast(0) / 150.0)).toFloat()
+            t.box = RectF(t.box.left + alpha * (d.box.left - t.box.left),
+                t.box.top + alpha * (d.box.top - t.box.top),
+                t.box.right + alpha * (d.box.right - t.box.right),
+                t.box.bottom + alpha * (d.box.bottom - t.box.bottom))
+            t.measured = RectF(d.box); t.frames++; t.seen = now; t.score = d.score
+            t.streak = if (d.score >= .5f) t.streak + 1 else 0
+            t.confirmed = t.confirmed || t.streak >= 3
+        }
+        tracks.filter { it.id !in used }.forEach { it.streak = 0 }
+        kept.forEachIndexed { i, d -> if (i !in assigned && d.score >= .5f) {
+            tracks += Track(nextId++, RectF(d.box), RectF(d.box), 1, 1, false, now, d.score)
+            used += tracks.last().id
+        } }
+        return tracks.filter { it.confirmed }.sortedBy { it.id }.map { t ->
+            TrackedBoundingBox(t.id, RectF(t.box), "Target", t.score,
+                trackingFrames = t.frames, isObserved = t.id in used)
         }
     }
 

@@ -4,6 +4,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -13,6 +15,24 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CameraPipelineStartupTest {
+    @Test fun `cancelled initialization closes native engine before losing ownership`() = runTest {
+        var closes = 0
+        var returned = false
+        lateinit var initialization: kotlinx.coroutines.Job
+        initialization = launch {
+            createOwnedDetectorEngine(StandardTestDispatcher(testScheduler)) {
+                initialization.cancel()
+                object : ObjectDetectorEngine {
+                    override fun detect(image: androidx.camera.core.ImageProxy) = emptyList<com.example.data.model.TrackedBoundingBox>()
+                    override fun close() { closes++ }
+                }
+            }
+            returned = true
+        }
+        runCurrent()
+        assertFalse(returned)
+        assertEquals(1, closes)
+    }
     @Test
     fun `full bind succeeds and does not invoke fallback`() {
         var fallbackCalls = 0

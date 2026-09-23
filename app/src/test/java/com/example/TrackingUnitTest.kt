@@ -18,7 +18,7 @@ import kotlin.math.abs
 class TrackingUnitTest {
 
     @Test
-    fun emptyDetectorResultDoesNotCreateOrRetainSelectableTargets() {
+    fun trackerRetainsUnobservedSelectionUntilExpiry() {
         val viewModel = MainViewModel(RuntimeEnvironment.getApplication())
         assertTrue(viewModel.trackedObjects.value.isEmpty())
 
@@ -32,12 +32,12 @@ class TrackingUnitTest {
         viewModel.selectTrack(detected.id)
         assertEquals(detected.id, viewModel.selectedTrackId.value)
 
-        viewModel.onObjectsTracked(emptyList(), 11)
-
-        assertTrue(viewModel.trackedObjects.value.isEmpty())
-        assertEquals(null, viewModel.selectedTrackId.value)
+        viewModel.onObjectsTracked(listOf(detected.copy(isObserved = false)), 11)
+        assertTrue(!viewModel.beginCapture(detected.id, detected.normalizedRect))
+        assertTrue(!viewModel.trackedObjects.value.single().isObserved)
+        assertEquals(detected.id, viewModel.selectedTrackId.value)
         viewModel.selectNextTrack()
-        assertEquals(null, viewModel.selectedTrackId.value)
+        assertEquals(detected.id, viewModel.selectedTrackId.value)
     }
 
     @Test
@@ -94,9 +94,11 @@ class TrackingUnitTest {
         assertTrue(viewModel.trackedObjects.value.first { it.id == 2 }.isSelected)
 
         // An unrelated detection must not steal the lock at the selected track's old list index.
-        viewModel.onObjectsTracked(listOf(mockBoxes.first()), 15)
+        viewModel.onObjectsTracked(listOf(mockBoxes.first(), mockBoxes.last().copy(isObserved = false)), 15)
         assertEquals(2, viewModel.selectedTrackId.value)
-        assertTrue(!viewModel.trackedObjects.value.single().isSelected)
+        assertTrue(viewModel.trackedObjects.value.last().isSelected)
+        viewModel.onObjectsTracked(listOf(mockBoxes.first()), 15)
+        assertEquals(1, viewModel.selectedTrackId.value)
 
         // IDs not present in the current detector output can never become stale selections.
         viewModel.selectTrack(999)

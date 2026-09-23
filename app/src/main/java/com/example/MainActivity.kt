@@ -194,7 +194,7 @@ fun MysteriesOfNatureApp(
         // Copy both values synchronously. Tracking may publish another list during capture.
         val clickTrackId = selectedTrackId
         val clickRect = clickTrackId?.let { id ->
-            trackedObjects.firstOrNull { it.id == id }?.normalizedRect?.let { RectF(it) }
+            trackedObjects.firstOrNull { it.id == id && it.isObserved }?.normalizedRect?.let { RectF(it) }
         }
         if (clickTrackId == null || clickRect == null) {
             viewModel.requireTargetSelection()
@@ -214,7 +214,7 @@ fun MysteriesOfNatureApp(
             clickRect.right * view.width, clickRect.bottom * view.height
         )
         controller.captureTarget(TargetCaptureRequest(clickTrackId, previewRect)) { snapshot ->
-            viewModel.analyzeImage(ScanRequest(snapshot.trackId, snapshot.bitmap, clickRect))
+            viewModel.analyzeImage(ScanRequest(snapshot.trackId, snapshot.bitmap, clickRect, snapshot.expandedBitmap))
         }
     }
 
@@ -355,24 +355,14 @@ internal fun resolveScanFailureMessage(
 ): String {
     val vi = language == AppLanguage.VIETNAMESE
     val id = when (reason) {
-        ScanFailureReason.Network -> if (vi) R.string.scan_error_network_vi else R.string.scan_error_network_en
-        ScanFailureReason.Dns -> if (vi) R.string.scan_error_dns_vi else R.string.scan_error_dns_en
-        ScanFailureReason.Tls -> if (vi) R.string.scan_error_tls_vi else R.string.scan_error_tls_en
-        ScanFailureReason.ConnectionRefused -> if (vi) R.string.scan_error_connect_vi else R.string.scan_error_connect_en
-        ScanFailureReason.Io -> if (vi) R.string.scan_error_io_vi else R.string.scan_error_io_en
-        ScanFailureReason.Timeout -> if (vi) R.string.scan_error_timeout_vi else R.string.scan_error_timeout_en
-        ScanFailureReason.EmptyResponse -> if (vi) R.string.scan_error_empty_vi else R.string.scan_error_empty_en
-        ScanFailureReason.InvalidResponse, ScanFailureReason.MalformedJson,
-        ScanFailureReason.TruncatedResponse, ScanFailureReason.SafetyBlocked,
-        ScanFailureReason.NoCandidates, ScanFailureReason.MissingContent,
-        is ScanFailureReason.MissingRequiredField, is ScanFailureReason.UnknownCategory,
-        is ScanFailureReason.InconsistentTaxonomy, null ->
+        ScanFailureReason.LocalModelUnavailable ->
+            if (vi) R.string.scan_error_model_unavailable_vi else R.string.scan_error_model_unavailable_en
+        ScanFailureReason.InvalidResponse, null ->
             if (vi) R.string.scan_error_invalid_vi else R.string.scan_error_invalid_en
         ScanFailureReason.Unexpected -> if (vi) R.string.scan_error_invalid_vi else R.string.scan_error_invalid_en
         is ScanFailureReason.LowConfidence -> if (vi) R.string.scan_error_confidence_vi else R.string.scan_error_confidence_en
-        is ScanFailureReason.Http -> if (vi) R.string.scan_error_http_vi else R.string.scan_error_http_en
     }
-    return if (reason is ScanFailureReason.Http) context.getString(id, reason.statusCode) else context.getString(id)
+    return context.getString(id)
 }
 
 /**

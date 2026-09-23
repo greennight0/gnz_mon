@@ -15,3 +15,9 @@
 .cxx
 local.properties
 .env
+
+# Local Android build outputs and service configuration
+**/build/
+/app/google-services.json
+/tools/offline_model/data/
+/tools/offline_model/.venv/
