@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="VerifyDetectorModelArchiveTaskTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-09-22T09:17:37.684Z" hostname="LIOH" time="15.362">
+  <properties/>
+  <testcase name="required assets and exact tflite inventory are enforced()" classname="VerifyDetectorModelArchiveTaskTest" time="13.973"/>
+  <testcase name="unexpected tflite model is rejected()" classname="VerifyDetectorModelArchiveTaskTest" time="0.245"/>
+  <testcase name="only explicitly supplied variant archives are verified()" classname="VerifyDetectorModelArchiveTaskTest" time="0.257"/>
+  <testcase name="at least one supplied archive is required()" classname="VerifyDetectorModelArchiveTaskTest" time="0.187"/>
+  <testcase name="every supplied archive must contain exactly one model()" classname="VerifyDetectorModelArchiveTaskTest" time="0.569"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
