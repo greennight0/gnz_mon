@@ -894,17 +894,27 @@ internal fun UncertainTag(result: RecognitionResult.Uncertain, language: AppLang
         border = androidx.compose.foundation.BorderStroke(1.5.dp, AmberGlow)
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(if (isVi) "Chưa đủ chắc chắn để xác định loài" else "Not enough confidence to identify the species",
+            Text(if (isVi) "Chưa đủ chắc chắn để nhận diện" else "Not enough confidence to identify",
                 color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
             result.candidates.forEach { candidate ->
-                Text("${candidate.scientificName} · ${"%.1f".format(java.util.Locale.ROOT, candidate.score * 100)}%",
+                Text(candidate.scientificName,
                     color = AmberGlow, fontSize = 12.sp)
             }
-            Text(if (isVi) "Gợi ý chưa xác nhận. Điểm mô hình không phải xác suất đúng đã được kiểm chứng."
-                else "Unconfirmed suggestions. Model scores are not calibrated probabilities of correctness.",
-                color = Color.White, fontSize = 11.sp)
-            Text(if (isVi) "Chụp gần, đủ sáng và lấy trọn mẫu. Thử thêm lá hoặc hoa."
-                else "Move closer, use good lighting and include the whole specimen. Try a leaf or flower.",
+            result.commonCandidates.forEach { candidate ->
+                Text(if (isVi) candidate.nameVi else candidate.nameEn,
+                    color = AmberGlow, fontSize = 12.sp)
+            }
+            if (result.candidates.isNotEmpty() || result.commonCandidates.isNotEmpty()) {
+                Text(if (isVi) "Gợi ý chưa xác nhận" else "Unconfirmed suggestions",
+                    color = Color.White, fontSize = 11.sp)
+            }
+            Text(if (result.produceGuidance) {
+                if (isVi) "Chụp trọn quả hoặc nải, giữ máy ổn định, đủ sáng."
+                else "Include the whole fruit or bunch, hold steady and use good lighting."
+            } else {
+                if (isVi) "Chụp gần, đủ sáng và lấy trọn mẫu."
+                else "Move closer, use good lighting and include the whole specimen."
+            },
                 color = Color.White, fontSize = 12.sp)
             Surface(Modifier.clickable(onClick = onRescanClick).testTag("rescan_uncertain"),
                 color = CyberCyan, shape = RoundedCornerShape(10.dp)) {

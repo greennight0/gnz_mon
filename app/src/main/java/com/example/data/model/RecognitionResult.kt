@@ -9,9 +9,24 @@ sealed interface RecognitionResult {
 
     data class Candidate(val scientificName: String, val score: Float)
 
-    data class Uncertain(val candidates: List<Candidate>) : RecognitionResult {
+    /** A common food name is not a scientific species identification. Scores stay internal. */
+    data class CommonCandidate(val groupCode: String, val nameVi: String, val nameEn: String,
+        val score: Float) {
         init {
-            require(candidates.size <= 3)
+            require(groupCode.isNotBlank() && nameVi.isNotBlank() && nameEn.isNotBlank())
+            require(score.isFinite() && score in 0f..1f)
+        }
+    }
+
+    data class Uncertain(
+        val candidates: List<Candidate>,
+        val commonCandidates: List<CommonCandidate> = emptyList(),
+        val produceGuidance: Boolean = commonCandidates.isNotEmpty()
+    ) : RecognitionResult {
+        init {
+            require(candidates.size + commonCandidates.size <= 3)
+            require(candidates.isEmpty() || commonCandidates.isEmpty())
+            require(commonCandidates.map { it.groupCode }.distinct().size == commonCandidates.size)
             require(candidates.all { it.score.isFinite() && it.score in 0f..1f })
         }
     }

@@ -6,6 +6,7 @@ import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import java.security.MessageDigest
 import java.util.zip.ZipFile
+import groovy.json.JsonSlurper
 
 abstract class ValidateCommonPlantModelTask : DefaultTask() {
     @get:InputDirectory @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -25,5 +26,26 @@ abstract class ValidateCommonPlantModelTask : DefaultTask() {
                 .bufferedReader().readLines().filter { it.isNotBlank() } == labels.lines())
         }
         check(dir.resolve("common_plant.LICENSE.txt").readText().contains("Apache License"))
+        val policy = dir.resolve("common_plant.policy.json").readText()
+        validateCommonPolicy(policy, sha, labels.lines().toSet())
+    }
+}
+
+internal fun validateCommonPolicy(text: String, modelSha: String, labels: Set<String>) {
+    val root = JsonSlurper().parseText(text) as Map<*, *>
+    check(root["schemaVersion"] == 1 && root["modelSha256"] == modelSha) { "Policy/model mismatch" }
+    check(root["mode"] in setOf("imagenet", "produce20"))
+    check((root["version"] as String).isNotBlank())
+    val classes = root["classes"] as Map<*, *>
+    if (root["mode"] == "produce20") check(classes.keys == labels) { "Every class requires calibration" }
+    classes.forEach { (label, value) ->
+        check(label in labels) { "Policy enables a label absent from model: $label" }
+        val row = value as Map<*, *>
+        check(row["confirmationEnabled"] is Boolean)
+        for (key in listOf("minimumMean", "minimumView", "minimumMargin", "minimumViewMargin", "suggestionMinimum")) {
+            if (key == "suggestionMinimum" && row[key] == null) continue
+            val score = (row[key] as Number).toDouble()
+            check(score.isFinite() && score in 0.0..1.0) { "Invalid $key for $label" }
+        }
     }
 }

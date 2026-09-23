@@ -2,6 +2,7 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.PathSensitive
@@ -33,6 +34,9 @@ abstract class VerifyDetectorModelArchiveTask : DefaultTask() {
   abstract val requiredAssetPaths: ListProperty<String>
 
   @get:Input
+  abstract val expectedAdditionalSha256: MapProperty<String, String>
+
+  @get:Input
   abstract val expectedTfliteAssetPaths: ListProperty<String>
 
   @get:InputFiles
@@ -41,6 +45,7 @@ abstract class VerifyDetectorModelArchiveTask : DefaultTask() {
 
   init {
     requiredAssetPaths.convention(emptyList())
+    expectedAdditionalSha256.convention(emptyMap())
     expectedTfliteAssetPaths.convention(emptyList())
     outputs.upToDateWhen { false }
   }
@@ -90,6 +95,13 @@ abstract class VerifyDetectorModelArchiveTask : DefaultTask() {
           check(requiredMatches.size == 1) {
             "${archive.name} must contain exactly one $requiredPath; found ${requiredMatches.map { it.name }}"
           }
+        }
+        expectedAdditionalSha256.get().forEach { (path, expected) ->
+          val entries = zip.entries().asSequence().filter { !it.isDirectory && it.name.endsWith(path) }.toList()
+          check(entries.size == 1) { "Expected one $path in ${archive.name}" }
+          val bytes = zip.getInputStream(entries.single()).use { it.readBytes() }
+          val actual = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+          check(actual == expected) { "Packaged asset checksum mismatch: $path" }
         }
         val expectedModels = expectedTfliteAssetPaths.get().toSet()
         if (expectedModels.isNotEmpty()) {

@@ -103,12 +103,13 @@ class ScanStateUiTest {
                 scanState = ScanState.Completed(7, rect, result), language = language,
                 onSpeciesClick = {}, onCaptureClick = {})
         }
-        composeRule.onNodeWithText("Chưa đủ chắc chắn để xác định loài").assertExists()
-        composeRule.onNodeWithText("Example plant · 67.0%").assertExists()
+        composeRule.onNodeWithText("Chưa đủ chắc chắn để nhận diện").assertExists()
+        composeRule.onNodeWithText("Example plant").assertExists()
+        composeRule.onNodeWithText("67.0%", substring = true).assertDoesNotExist()
         composeRule.onNodeWithTag("not_organism_message").assertDoesNotExist()
         composeRule.onNodeWithTag("rescan_uncertain").assertExists()
         composeRule.runOnIdle { language = AppLanguage.ENGLISH }
-        composeRule.onNodeWithText("Not enough confidence to identify the species").assertExists()
+        composeRule.onNodeWithText("Not enough confidence to identify").assertExists()
     }
 
     @Test fun `capture error releases reservation and allows retry`() {

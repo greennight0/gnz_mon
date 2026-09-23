@@ -363,6 +363,8 @@ class CameraController(
         val bitmap = squareTargetBitmap(source, square)
         val expanded = RectF(square).apply { inset(-width() * .05f, -height() * .05f) }
         val contextBitmap = squareTargetBitmap(source, expanded)
+        if (com.example.BuildConfig.DEBUG) Log.d("CommonRecognition", "capture track=$trackId source=$kind " +
+            "size=${source.width}x${source.height} target=$rect whole=$square expanded=$expanded")
         return TargetSnapshot(trackId, bitmap, square, Size(source.width, source.height), kind, contextBitmap)
     }
 

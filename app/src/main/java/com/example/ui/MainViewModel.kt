@@ -102,6 +102,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val captureReservations = mutableSetOf<Int>()
     private var selectionVersion = 0L
     private val captureVersions = mutableMapOf<Int, Long>()
+    private val captureStartedAt = mutableMapOf<Int, Long>()
 
     private val _targetSelectionRequired = MutableStateFlow(false)
     val targetSelectionRequired: StateFlow<Boolean> = _targetSelectionRequired.asStateFlow()
@@ -313,6 +314,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         (_scanState.value as? ScanState.CapturingFrame)?.let { capture ->
             runningTrackIds.remove(capture.trackId)
             captureReservations.remove(capture.trackId)
+            captureVersions.remove(capture.trackId)
+            captureStartedAt.remove(capture.trackId)
             _scanState.value = ScanState.Failed(capture.trackId, capture.snapshotRect, ScanFailureReason.Unexpected)
         }
         _recognitionError.value = error
@@ -326,6 +329,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runningTrackIds += trackId
         captureReservations += trackId
         captureVersions[trackId] = selectionVersion
+        captureStartedAt[trackId] = android.os.SystemClock.elapsedRealtime()
         _scanState.value = ScanState.CapturingFrame(trackId, RectF(snapshotRect))
         return true
     }
@@ -347,6 +351,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val targetId = request.trackId
         if (!captureReservations.remove(targetId) && !runningTrackIds.add(targetId)) return
         val versionAtStart = captureVersions.remove(targetId) ?: selectionVersion
+        val startedAt = captureStartedAt.remove(targetId) ?: android.os.SystemClock.elapsedRealtime()
         val snapshotRect = RectF(request.snapshotRect)
         viewModelScope.launch {
             _isAnalyzing.value = true
@@ -358,14 +363,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 // The bitmap and ID are one immutable click-time request; do not re-read tracking.
                 val phaseCallback: (ScanTransportPhase) -> Unit = { phase ->
-                    _scanState.value = when (phase) {
-                        ScanTransportPhase.PREPARING -> ScanState.PreparingImage(targetId, snapshotRect)
-                        ScanTransportPhase.CLASSIFYING -> ScanState.Classifying(targetId, snapshotRect)
+                    if (selectionVersion == versionAtStart) {
+                        _scanState.value = when (phase) {
+                            ScanTransportPhase.PREPARING -> ScanState.PreparingImage(targetId, snapshotRect)
+                            ScanTransportPhase.CLASSIFYING -> ScanState.Classifying(targetId, snapshotRect)
+                        }
                     }
                 }
                 val result = request.expandedBitmap?.let {
                     identifyPair(request.croppedBitmap, it, phaseCallback)
                 } ?: identifyImage(request.croppedBitmap, phaseCallback)
+                if (com.example.BuildConfig.DEBUG) Log.d("CommonRecognition", "scan track=$targetId " +
+                    "elapsedMs=${android.os.SystemClock.elapsedRealtime() - startedAt} " +
+                    "result=${result.javaClass.simpleName} stale=${selectionVersion != versionAtStart}")
                 // A late result belongs to its capture, not a newly selected target.
                 if (selectionVersion != versionAtStart) {
                     _scanState.value = ScanState.Idle
@@ -400,6 +410,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (selectionVersion != versionAtStart) return@launch
                 _detectedSpecies.value = null
                 val reason = classifyScanFailure(e)
                 // Log the Throwable overload before publishing state so the complete stack is retained.

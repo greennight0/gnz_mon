@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "version": "legacy-conservative-v1",
+  "mode": "imagenet",
+  "modelSha256": "6c7ab0a6e5dcbf38a8c33b960996a55a3b4300b36a018c4545801de3a3c8bde0",
+  "calibration": "No per-class calibration yet; conservative legacy confirmation thresholds; suggestions disabled.",
+  "classes": {}
+}

@@ -25,9 +25,15 @@ class CommonPlantBenchmarkInstrumentedTest {
         val directory = "common-plant-benchmark"
         val cases = JSONArray(assets.open("$directory/manifest.json").bufferedReader().use { it.readText() })
         val rows = JSONArray()
+        var firstView = emptyList<CommonPrediction>()
+        var secondView = emptyList<CommonPrediction>()
+        var decisionReason = ""
         val common = MediaPipeCommonRunner(instrumentation.targetContext)
         val plant = OnDeviceSpeciesClassifier(LiteRtPlantNetRunner(instrumentation.targetContext, Accelerator.CPU))
-        CommonPlantClassifier(common, plant).use { classifier ->
+        val policy = CommonPlantPolicy.load(instrumentation.targetContext)
+        CommonPlantClassifier(common, plant, policy) { a, b, decision ->
+            firstView = a; secondView = b; decisionReason = decision.reason
+        }.use { classifier ->
             for (i in 0 until cases.length()) {
                 val case = cases.getJSONObject(i)
                 val source = assets.open("$directory/${case.getString("image")}").use { BitmapFactory.decodeStream(it) }
@@ -44,7 +50,12 @@ class CommonPlantBenchmarkInstrumentedTest {
                     rows.put(JSONObject().put("image",case.getString("image")).put("split",case.getString("split"))
                         .put("truth",case.optString("groupCode")).put("category",case.getString("category"))
                         .put("prediction",code ?: scientific ?: result.javaClass.simpleName)
-                        .put("accepted",accepted).put("correct",correct).put("milliseconds",elapsed/1e6))
+                        .put("accepted",accepted).put("correct",correct).put("milliseconds",elapsed/1e6)
+                        .put("reason", decisionReason)
+                        .put("firstView", JSONObject(firstView.associate { it.label to it.score }))
+                        .put("secondView", JSONObject(secondView.associate { it.label to it.score }))
+                        .put("suggestions", JSONArray((result as? RecognitionResult.Uncertain)?.commonCandidates
+                            ?.map { it.groupCode } ?: emptyList<String>())))
                 } finally { source.recycle(); expanded.recycle() }
             }
         }
@@ -64,6 +75,7 @@ class CommonPlantBenchmarkInstrumentedTest {
         }
         val report = JSONObject().put("fieldAcceptance",false)
             .put("limitations","Small source-labelled studio regression set; not independent field validation")
+            .put("policyVersion", policy.version)
             .put("device",android.os.Build.MODEL).put("rows",rows).put("summaries",summaries)
         File(instrumentation.targetContext.getExternalFilesDir(null),"common-plant-benchmark.json").writeText(report.toString(2))
         assertEquals(cases.length(), rows.length())

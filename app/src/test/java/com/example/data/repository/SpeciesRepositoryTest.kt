@@ -26,6 +26,10 @@ class SpeciesRepositoryTest {
         try {
             assertEquals(uncertain, repository.identifyImage(bitmap))
             assertEquals(0, repository.discoveredSpeciesFlow.first().size)
+            response = com.example.data.model.RecognitionResult.Uncertain(emptyList(), listOf(
+                com.example.data.model.RecognitionResult.CommonCandidate("lime", "Chanh xanh", "Lime", .5f)))
+            repository.identifyPair(bitmap, bitmap)
+            assertEquals(0, repository.discoveredSpeciesFlow.first().size)
             response = com.example.data.model.RecognitionResult.CommonPlant("banana", "Chuối", "Banana", .9f)
             repository.identifyPair(bitmap, bitmap)
             assertEquals(0, repository.discoveredSpeciesFlow.first().size)

@@ -229,7 +229,13 @@ androidComponents {
       minimumByteCount.set(18_000_000L)
       expectedManifestPath.set("assets/models/common_plant.manifest.json")
       expectedSha256.set("6c7ab0a6e5dcbf38a8c33b960996a55a3b4300b36a018c4545801de3a3c8bde0")
-      requiredAssetPaths.set(listOf("assets/models/common_plant_labels.txt", "assets/models/common_plant.LICENSE.txt"))
+      requiredAssetPaths.set(listOf("assets/models/common_plant_labels.txt", "assets/models/common_plant.LICENSE.txt", "assets/models/common_plant.policy.json"))
+      expectedAdditionalSha256.set(listOf("common_plant_labels.txt", "common_plant.LICENSE.txt",
+        "common_plant.policy.json", "common_plant.manifest.json").associate { name ->
+        val bytes = providers.fileContents(layout.projectDirectory.file("src/main/assets/models/$name")).asBytes.get()
+        "assets/models/$name" to java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+          .joinToString("") { "%02x".format(it) }
+      })
       if (kind == "Apk") archives.from(variant.artifacts.get(SingleArtifact.APK).map { dir -> dir.asFileTree.matching { include("*.apk") } })
       else archives.from(variant.artifacts.get(SingleArtifact.BUNDLE))
     }

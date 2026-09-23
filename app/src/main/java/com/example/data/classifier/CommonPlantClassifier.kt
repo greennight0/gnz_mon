@@ -2,6 +2,8 @@ package com.example.data.classifier
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
+import com.example.BuildConfig
 import com.example.data.model.RecognitionResult
 import com.example.data.model.ScanTransportPhase
 import com.google.mediapipe.framework.image.BitmapImageBuilder
@@ -32,29 +34,16 @@ internal object CommonPlantCatalog {
     private val deferred = setOf("hay", "mushroom", "coral fungus", "agaric", "gyromitra",
         "stinkhorn", "earthstar", "hen-of-the-woods", "bolete")
     fun isDeferred(label: String) = label in deferred
-    fun resolve(a: List<CommonPrediction>, b: List<CommonPrediction>): RecognitionResult? {
-        fun accepted(values: List<CommonPrediction>): CommonPrediction? {
-            require(values.size >= 2 && values.all { it.score.isFinite() && it.score in 0f..1f })
-            val ranked = values.sortedByDescending { it.score }
-            return ranked[0].takeIf { it.score >= .75f && it.score - ranked[1].score >= .20f }
-        }
-        val first = accepted(a) ?: return null
-        val second = accepted(b) ?: return null
-        if (first.label != second.label) return RecognitionResult.Uncertain(emptyList())
-        val score = minOf(first.score, second.score)
-        val vi = names[first.label]
-        if (vi != null) return RecognitionResult.CommonPlant(first.label, vi,
-            if (first.label == "Granny Smith") "Apple" else first.label.replaceFirstChar { it.titlecase() }, score)
-        if (isDeferred(first.label)) return RecognitionResult.Uncertain(emptyList())
-        return RecognitionResult.NotOrganism("Outside plant/fruit scope", (score * 100).toInt())
-    }
+    fun resolve(a: List<CommonPrediction>, b: List<CommonPrediction>): RecognitionResult? =
+        CommonPlantPolicy().decide(a, b).result
 }
 
 internal class MediaPipeCommonRunner(context: Context) : CommonRunner, AutoCloseable {
     private val classifier = ImageClassifier.createFromOptions(context.applicationContext,
         ImageClassifier.ImageClassifierOptions.builder()
             .setBaseOptions(BaseOptions.builder().setModelAssetPath("models/common_plant.tflite").build())
-            .setMaxResults(3).build())
+            // Full vectors are needed for a meaningful mean across both views.
+            .setMaxResults(1000).build())
     override fun run(bitmap: Bitmap): List<CommonPrediction> {
         // MPImage owns its bitmap; preserve the shared capture for PlantNet and the second view.
         val owned = bitmap.copy(Bitmap.Config.ARGB_8888, false)
@@ -68,16 +57,19 @@ internal class MediaPipeCommonRunner(context: Context) : CommonRunner, AutoClose
 
 internal class CommonPlantClassifier(
     private val common: CommonRunner,
-    private val plants: SpeciesClassifier
+    private val plants: SpeciesClassifier,
+    private val policy: CommonPlantPolicy = CommonPlantPolicy(),
+    private val onDecision: (List<CommonPrediction>, List<CommonPrediction>, CommonDecision) -> Unit = { _, _, _ -> }
 ) : SpeciesClassifier, AutoCloseable {
     private val mutex = Mutex()
     override suspend fun classify(bitmap: Bitmap, onPhase: (ScanTransportPhase) -> Unit): RecognitionResult {
-        // Imported images have no pixels outside their boundary. Use a 10% inset and full image.
-        val dx = (bitmap.width * .05f).toInt()
-        val dy = (bitmap.height * .05f).toInt()
-        val inset = Bitmap.createBitmap(bitmap, dx, dy, bitmap.width - 2 * dx, bitmap.height - 2 * dy)
-        return try { classifyPair(inset, bitmap, onPhase) }
-        finally { if (inset !== bitmap) inset.recycle() }
+        // Preserve the entire imported specimen; never cut the tips off a banana bunch.
+        val bounds = android.graphics.RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
+        val whole = com.example.ui.camera.squareTargetBitmap(bitmap, bounds)
+        val expanded = com.example.ui.camera.squareTargetBitmap(bitmap,
+            android.graphics.RectF(bounds).apply { inset(-width() * .05f, -height() * .05f) })
+        return try { classifyPair(whole, expanded, onPhase) }
+        finally { whole.recycle(); expanded.recycle() }
     }
     override suspend fun classifyPair(bitmap: Bitmap, expanded: Bitmap,
         onPhase: (ScanTransportPhase) -> Unit): RecognitionResult = withContext(Dispatchers.Default) {
@@ -86,7 +78,13 @@ internal class CommonPlantClassifier(
             onPhase(ScanTransportPhase.CLASSIFYING)
             val a = common.run(bitmap)
             val b = common.run(expanded)
-            val commonResult = CommonPlantCatalog.resolve(a, b)
+            val decision = policy.decide(a, b)
+            onDecision(a, b, decision)
+            if (BuildConfig.DEBUG) Log.d("CommonRecognition", "policy=${policy.version} " +
+                "views=${bitmap.width}x${bitmap.height},${expanded.width}x${expanded.height} " +
+                "a=${a.sortedByDescending { it.score }.take(3)} b=${b.sortedByDescending { it.score }.take(3)} " +
+                "mean=${decision.combined.take(3)} reason=${decision.reason}")
+            val commonResult = decision.result
             if (commonResult != null) return@withLock commonResult
             val first = plants.classify(bitmap, onPhase)
             val second = plants.classify(expanded, onPhase)
@@ -106,7 +104,10 @@ internal class CommonPlantClassifier(
         fun create(context: Context): CommonPlantClassifier {
             val common = try { MediaPipeCommonRunner(context) }
             catch (e: Exception) { throw LocalModelUnavailableException(e) }
-            return try { CommonPlantClassifier(common, OnDeviceSpeciesClassifier.create(context)) }
+            return try {
+                val policy = CommonPlantPolicy.load(context)
+                CommonPlantClassifier(common, OnDeviceSpeciesClassifier.create(context), policy)
+            }
             catch (e: Exception) { common.close(); throw e }
         }
     }

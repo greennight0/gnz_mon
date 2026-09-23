@@ -1,0 +1,4 @@
+tensorflow==2.20.0
+tf-keras==2.20.1
+tensorflow-hub==0.16.1
+Pillow==12.3.0
